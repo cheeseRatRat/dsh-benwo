@@ -1,0 +1,44 @@
+{
+  "name": "dsh-benwo",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "dsh": ">=0.1.7-rc.1"
+  },
+  "description": "本我回响之核 — 人格与记忆的本地本体。核是一份文件夹，插件只是它的嘴和手。",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "memory",
+    "persona",
+    "local-first",
+    "context"
+  ],
+  "scripts": {
+    "test": "node test/acceptance.test.mjs && node test/acceptance2.test.mjs && node test/acceptance3.test.mjs && node test/alias-recall.test.mjs && node test/alias.test.mjs && node test/area.test.mjs && node test/cache-stable.test.mjs && node test/chain.test.mjs && node test/client-boot.test.mjs && node test/conflict.test.mjs && node test/decay.test.mjs && node test/dedup.test.mjs && node test/experience.test.mjs && node test/expiry.test.mjs && node test/floating.test.mjs && node test/hygiene.test.mjs && node test/inject-quota.test.mjs && node test/inject.test.mjs && node test/journey.test.mjs && node test/judge.test.mjs && node test/knowledge.test.mjs && node test/lookup.test.mjs && node test/meet.test.mjs && node test/no-dead-vars.test.mjs && node test/organize.test.mjs && node test/persona.test.mjs && node test/plan-state.test.mjs && node test/preflight.test.mjs && node test/presence.test.mjs && node test/promote.test.mjs && node test/recall-quality.test.mjs && node test/recall.test.mjs && node test/selfcheck-fixes.test.mjs && node test/status-predicates.test.mjs && node test/store.test.mjs && node test/time-layers.test.mjs && node test/today-structured.test.mjs && node test/trait.test.mjs"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "src",
+    "client.js",
+    "test",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": []
+    }
+  }
+}
