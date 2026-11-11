@@ -91,7 +91,11 @@ const WORKSHOP_ORDER = 93
 const CONTEXT_NAME = 'benwo-memory'
 const CONTEXT_ORDER = 240
 const REFRESH_MS = 3000
-const VERSION = 'v0.0.2'
+/**
+ * 版本号：跟 package.json 的 version 对齐（有测试盯着，改一处忘另一处会红）。
+ * 以前写死 v0.0.2，开源发到 0.1.x 之后日志里还印着旧号。
+ */
+const VERSION = 'v0.1.1'
 
 /** 什么时候才把「主人档案」翻出来：默认零占用，问到才给。 */
 const OWNER_HINTS =

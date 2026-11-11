@@ -78,7 +78,8 @@ console.log('\n客户端起飞前检查：')
 
 check('模块体能执行', () => assert.equal(moduleThrew, ''))
 check('注册的 id 等于包名', () => {
-  assert.equal(captured.entry.id, '@local/dsh-benwo')
+  // 2026-11-11：包名从 @local/dsh-benwo 改成 dsh-benwo（开源去 scope），client 的注册 id 跟着改。
+  assert.equal(captured.entry.id, 'dsh-benwo')
 })
 check('factory 只要了 react', () => assert.equal(factoryThrew, ''))
 check('有 apply', () => assert.equal(typeof mod.apply, 'function'))

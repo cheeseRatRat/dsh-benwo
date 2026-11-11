@@ -100,6 +100,13 @@ export function validateDraft(draft, now = new Date()) {
       '被取代': '',
       /** 有效到（B2）：到期就不主动晃，但不删、能被召回。空 = 长期有效。 */
       '有效到': String(draft['有效到'] || ''),
+      /**
+       * 关于谁（对方 / 自己 / 我们）和领域（核 / 绘图 / QQ / 桌面 / 生活）。
+       * 2026-11-11 夜修：这两个键以前漏在拼装里，工具参数收了却静默丢弃——
+       * 结果是新写的条目永远拿不到「领域加成」，召回时抬不起来。
+       */
+      '关于': String(draft['关于'] || draft.about || ''),
+      '领域': String(draft['领域'] || draft.area || ''),
       body: composeBody(detail, why),
       detail,
       why,

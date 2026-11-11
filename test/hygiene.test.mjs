@@ -127,5 +127,15 @@ await check('写得进去就说明锁真的放开了（不会自己锁死自己�
   await fs.rm(root, { recursive: true, force: true })
 })
 
+// 2026-11-11 夜加：发版时 index.js 里印的版本号必须跟 package.json 对齐。
+// 以前写死 v0.0.2，开源发到 0.1.x 之后日志里还印着旧号。
+await check('VERSION 跟 package.json 一致', async () => {
+  const src = await fs.readFile(new URL('../index.js', import.meta.url), 'utf8')
+  const hit = src.match(/const VERSION = '([^']+)'/)
+  assert.ok(hit, 'index.js 里找不到 VERSION')
+  const pkg = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'))
+  assert.equal(hit[1], 'v' + pkg.version)
+})
+
 console.log(`工程卫生 ${passed} 通过 / ${failed} 失败`)
 if (failed > 0) process.exit(1)

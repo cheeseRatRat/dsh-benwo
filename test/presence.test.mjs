@@ -28,7 +28,8 @@ const check = async (name, fn) => {
 }
 
 const base = path.join(os.tmpdir(), 'benwo-presence-' + process.pid + '-' + Date.now())
-const CORE = 'C:/Users/11588/.dsh/benwo/核'
+// 只是登记表里的一个 root 字符串，不需要真实存在；不要写死某台机器的路径（开源会带人用户名）。
+const CORE = path.join(base, '核')
 
 console.log('\n在场登记：')
 

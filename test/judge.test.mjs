@@ -115,5 +115,18 @@ check('只有一条证据不行', () => {
   assert.equal(out.ok, false)
 })
 
+// ---- 关于 / 领域（2026-11-11 夜修：工具参数收进来了，拼装记录时却被静默丢掉）
+check('关于和领域收进来就不会被丢', () => {
+  const out = validateDraft(draft({ about: '我们', area: '核' }))
+  assert.equal(out.ok, true)
+  assert.equal(out.record['关于'], '我们')
+  assert.equal(out.record['领域'], '核')
+})
+check('没给关于和领域时留空，不编', () => {
+  const out = validateDraft(draft())
+  assert.equal(out.record['关于'], '')
+  assert.equal(out.record['领域'], '')
+})
+
 console.log(`\n写入闸门测试：${passed} 通过，${failed} 失败`)
 if (failed > 0) process.exit(1)

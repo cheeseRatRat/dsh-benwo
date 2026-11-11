@@ -514,6 +514,8 @@ export function buildMemoryBlock({ today = [], records = [], now = new Date(), p
     text = assemble()
   }
 
+  // 2026-11-11 夜：这句动过一次，又原样恢复了。
+  // 她的判断更稳——删它属于「优化」，不是必须；没完全确认之前，不拿已经跑通的行为冒险。
   if (dropped > 0 && text) {
     text += `\n（还有 ${dropped} 条这轮没放下）`
   }
