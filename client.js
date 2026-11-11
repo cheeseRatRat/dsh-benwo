@@ -1,7 +1,7 @@
 /**
- * 小蓝·本我回响之核 · 面板（客户端）。
+ * 本我回响之核 · 面板（客户端）。
  *
- * 一个入口，全名「小蓝·本我回响之核」；里面三个页签：
+ * 一个入口，全名「本我回响之核」；里面六个页签：
  *   记忆 —— 长期、今天
  *   人格 —— 底子、可改层、画像
  *   工坊 —— 经验（怎么干活，可以给雪奈看）
@@ -13,7 +13,7 @@
  * 校验失败 → 桌面端打不开。apply 里还加了兜底，宁可不挂载也不抛。
  */
 window.__ModuleLoader__.load({
-  id: '@local/dsh-benwo',
+  id: 'dsh-benwo',
   factory(require) {
     const React = require('react')
     const h = React.createElement
