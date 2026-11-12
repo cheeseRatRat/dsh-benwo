@@ -55,11 +55,16 @@ const CASES = [
   { query: '小笨蛋是不是在骂我', expect: 'm-dummy' },
   { query: '打包之前要不要问你', expect: 'm-pack' },
 
-  // ---- 换词/换说法：字面匹配抓不住，这是已知天花板（xfail）
+  // ---- 换词/换说法：字面匹配抓不住，这是已知天花板
   { query: '搬家的规矩', expect: 'm-pack', note: '挂了别名 [搬家,备份] 之后能对上（2026-11-09，原来是 xfail）' },
-  { query: '她舍不得花 token', expect: 'm-rep', xfail: true, note: '字面抓不住「舍不得花」↔「别闷头干完」' },
-  { query: '画图去哪边', expect: 'm-paint', xfail: true, note: '字面抓不住「画图↔绘图/出图」' },
-  { query: '我们俩谁说了算', expect: 'm-equal', xfail: true, note: '这是语义题，不是字面题' },
+  { query: '她舍不得花 token', expect: 'm-rep', note: '2026-11-12 转正：虚词碎片过滤后能对上' },
+  { query: '画图去哪边', expect: 'm-paint', note: '2026-11-12 转正：别名与分词调整后能对上' },
+  {
+    query: '我们俩谁说了算',
+    expect: 'm-equal',
+    xfail: true,
+    note: '语义题：问句和「平等：叫主人也只是叫法」没有字面交集。2-gram 召回救不了，得等语义层；不当缺陷藏，写在这里当基线。',
+  },
 ]
 
 /** 默认按 id 命中第 1 名算过；也可以允许多命中里的任意一条。 */

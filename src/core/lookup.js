@@ -20,19 +20,61 @@ import { recall } from './recall.js'
 import { isAlive } from './decay.js'
 
 /** 记忆命中的日期锚点。跨月也算出来（给「按月份圈日记」用）。 */
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/
+
+/** 某天 ±offset。 */
+function shiftDay(day, offset) {
+  const d = new Date(day + 'T00:00:00')
+  d.setDate(d.getDate() + offset)
+  return dayOf(d)
+}
+
+/**
+ * 一条记忆能指到的「日子」（2026-11-12 扩）。
+ *
+ * 以前只拿「首次」——可补记的旧事（11-11 写 11-07 的事）：
+ *   首次 = 事情发生那天，日记却写在后来的某天。
+ * 现在三路合一：
+ *   · 首次       —— 事情发生的那天
+ *   · 来源日期   —— 真正写下它的那天（`网页:2026-11-11` 里的日期）
+ *   · 上次       —— 首次后 60 天内又提起，说明是补记/回顾，那天也翻
+ */
+function anchorDaysOf(record) {
+  const out = []
+  const push = (day) => {
+    if (DAY_RE.test(day) && !out.includes(day)) out.push(day)
+  }
+  const first = String((record && record['首次']) || '').slice(0, 10)
+  push(first)
+  const sources = Array.isArray(record && record['来源'])
+    ? record['来源']
+    : String((record && record['来源']) || '').split(',')
+  for (const source of sources) {
+    const m = /(\d{4}-\d{2}-\d{2})/.exec(String(source))
+    if (m) push(m[1])
+  }
+  const last = String((record && record['上次']) || '').slice(0, 10)
+  if (DAY_RE.test(first) && DAY_RE.test(last)) {
+    const gap = (new Date(last + 'T00:00:00') - new Date(first + 'T00:00:00')) / 86400000
+    if (gap > 0 && gap <= 60) push(last)
+  }
+  return out
+}
+
 export function anchorsOf(hits = [], { pad = 1 } = {}) {
   const dates = new Set()
   let min = ''
   let max = ''
   for (const hit of hits) {
-    const day = String((hit.record && hit.record['首次']) || '').slice(0, 10)
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue
-    if (!min || day < min) min = day
-    if (!max || day > max) max = day
-    for (let offset = -pad; offset <= pad; offset += 1) {
-      const d = new Date(day + 'T00:00:00')
-      d.setDate(d.getDate() + offset)
-      dates.add(dayOf(d))
+    const first = String((hit.record && hit.record['首次']) || '').slice(0, 10)
+    if (DAY_RE.test(first)) {
+      if (!min || first < min) min = first
+      if (!max || first > max) max = first
+    }
+    for (const day of anchorDaysOf(hit.record)) {
+      for (let offset = -pad; offset <= pad; offset += 1) {
+        dates.add(shiftDay(day, offset))
+      }
     }
   }
   const months = new Set()
@@ -101,6 +143,27 @@ export async function readPage(file) {
 }
 
 /**
+ * 最近 N 天的日记（2026-11-12）。
+ *
+ * 按「时间」圈，不看记忆锚点——这是给「记忆沉底、或者那天没记进长期」兜底的。
+ * 同一天可能有 -2 后缀的第二篇，按前 10 位日期比。
+ */
+export async function diariesRecent(L, now = new Date(), days = 2) {
+  const names = await daysIn(L.diary)
+  const endDay = dayOf(now)
+  const start = new Date(endDay + 'T00:00:00')
+  start.setDate(start.getDate() - (Math.max(1, days) - 1))
+  const startDay = dayOf(start)
+  return names
+    .filter((day) => {
+      const d = day.slice(0, 10)
+      return d >= startDay && d <= endDay
+    })
+    .sort()
+    .map((day) => ({ day, file: path.join(L.diary, `${day}.md`) }))
+}
+
+/**
  * 首行摘要：优先用 front matter 里的 `summary:`（日记自己写的一句话总览），
  * 没有才抓正文第一行。
  *
@@ -129,6 +192,8 @@ export function headOf(text, max = 60) {
       .filter((x) => !/^[*_\s]*\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*日/.test(x))
       .filter((x) => !/^[*_\s]*\d{4}-\d{2}-\d{2}/.test(x))
       .map((x) => x.replace(/^[-*+]\s*/, '').replace(/^\d{2}:\d{2}\s*/, '').trim())
+      // 行式日记（`- 23:13 # 2026-11-11`）剥掉时间后又会露出标题，再滤一次
+      .filter((x) => x && !x.startsWith('#'))
       .filter(Boolean)[0] || ''
   return line.length > max ? line.slice(0, max) + '…' : line
 }

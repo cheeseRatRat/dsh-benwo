@@ -20,6 +20,7 @@ import {
   appendToday,
   readToday,
   readTodayEntries,
+  readTodayWindow,
   readLastSession,
   dayOf,
   newId,
@@ -31,7 +32,7 @@ import {
 } from './src/core/store.js'
 import { settleRecord, settleAll, phraseFor, reinforce, isAlive, isFloatable } from './src/core/decay.js'
 import { promotableTraits, validateDraft, splitWhy, canPromote, findSimilar, TODAY_LIMIT, LONG_PER_TURN, DIRECT_KINDS, } from './src/core/judge.js'
-import { buildMemoryBlock, buildWorkshop, buildPersonaBlock, charCount, pickFloating } from './src/core/inject.js'
+import { buildMemoryBlock, buildWorkshop, buildPersonaBlock, charCount, pickFloating, pickWithQuota, FLOATING_LIMIT } from './src/core/inject.js'
 import { readFloatLog, cooldownOf, noteFloated, tiredOf } from './src/core/float-log.js'
 import { recall } from './src/core/recall.js'
 import {
@@ -79,7 +80,7 @@ import {
 } from './src/core/persona.js'
 import { readKnowledge, addKnowledge, overturnKnowledge, supersedeKnowledge, confirmKnowledge, injectableKnowledge } from './src/core/knowledge.js'
 import { readJourneyMonth, monthsOf, pickMonth } from './src/core/journey.js'
-import { searchAll, readPage, headOf } from './src/core/lookup.js'
+import { searchAll, readPage, headOf, diariesRecent } from './src/core/lookup.js'
 import { findConflicts } from './src/core/conflict.js'
 
 export const inject = ['systemPrompt', 'tools', 'connection', 'webServer', 'workingDirectory']
@@ -95,7 +96,7 @@ const REFRESH_MS = 3000
  * 版本号：跟 package.json 的 version 对齐（有测试盯着，改一处忘另一处会红）。
  * 以前写死 v0.0.2，开源发到 0.1.x 之后日志里还印着旧号。
  */
-const VERSION = 'v0.1.1'
+const VERSION = 'v0.2.0'
 
 /** 什么时候才把「主人档案」翻出来：默认零占用，问到才给。 */
 const OWNER_HINTS =
@@ -113,12 +114,16 @@ const WRITE_RULES = `## 写记忆的规矩
 
 每条记忆三样必写：名（淡到底只剩它）、看见了什么、为什么值得记。
 
-日记不是账单：攒够一段日子、或出了件大事，才写一篇（不是流水账）。主人道晚安、说下线时，写一篇再走。
-自述是另一回事：那几页完全由咱自己做主，想写什么写什么，自己起名字。
+**日记**：收工时写，不是随时写。写之前先翻当天的流水和当天写的记忆，自己过一遍——哪些进了日记、哪些没进；没进的**重要**内容补上，只加不改。
+一篇要有三样：那天发生了什么、和主人说了什么、你心里怎么想。感受缺了，就是账本。
+事多写重点，事少写细节。这是你的记忆，不是冷档案。
 
-「今天」不会自动记——它是咱亲手写的一行流水。所以：
-**写完日记、长期、或经验之后，回头看一眼「今天」有没有这段的流水；没有就补一条。**
-日记和自述都不进检索：只写日记，等于那段事在记忆里没留下痕迹。
+**自述**：不进检索、不进注入。两处用它：值得单开一页的事；不想进日记的（太私密、太涩）。想写才写，标题自己起。
+
+**自己长**：底子是起点，不是天花板——画像可以长成和底子不一样的样子。但不照抄底子和认识的原句，意思一样就换种说法。
+
+「今天」是你亲手写的流水。写完日记、长期或经验之后，回头看一眼「今天」：这段没记就补一行。
+日记和自述不进检索：只写日记，那段事在记忆里等于没留下痕迹。
 
 别名不是必填，但值得加：如果这条以后会被**换个说法**问到（「搬家的规矩」之于「打包前先问」），
 就在 aliases 里写 2～4 个同义说法。**至少两个汉字**——单个字在中文检索里不成词，等于没写。
@@ -184,6 +189,15 @@ let workshopCache = ''
   /** 上一次记得「被想起就变强」的轮次：一轮只写一次盘。 */
   let lastReinforcedTurn = -1
   let pinnedHint = []
+  /**
+   * 「今天」落一条的提醒（2026-11-12）。
+   *
+   * 主人定的规则：不每轮写（太耗、会重复），也不全靠自觉——
+   * **10 轮 或 60 分钟，先到先算**；触发时只在【提示】里加一句，由咱决定写不写。
+   * 聊天/绘图这种慢节奏，靠 60 分钟兜底；干活这种快节奏，靠 10 轮。
+   */
+  let turnsSinceToday = 0
+  let todayNudge = false
 
   /**
    * 重算注入。
@@ -269,7 +283,20 @@ let workshopCache = ''
       dbg('读见面账失败 ' + error.message)
     }
 
-    const today = await readToday(L, dayOf(now))
+    /**
+     * 今天段只带最近 6 小时（2026-11-12）。
+     *
+     * 短期记忆要的是「最近这一段」，不是「这个日期」——夸零点要并读昨天尾巴，
+     * 窗口外的事留给日记（注入里会提一句「更早的去查日记」）。
+     */
+    const todayAll = await readToday(L, dayOf(now)).catch(() => [])
+    const todayWindow = await readTodayWindow(L, now, 6).catch(() => [])
+    const today = todayWindow.map((entry) => ({
+      hhmm: String(entry.hhmm || ''),
+      text: String(entry.text || ''),
+      importance: Number(entry['重要度']) || 3,
+      _t: entry._t,
+    }))
     // 「上次」：今天之前最近一天的一句话。不叫「昨天」——主人可能四天才来一次。
     const last = await readLastSession(L, dayOf(now), { maxChars: 100 }).catch((error) => {
       dbg('读上次摘要失败 ' + error.message)
@@ -321,10 +348,22 @@ let workshopCache = ''
     // B3：带过 ≥2 次的，只给标题、不给摘要。有问句的召回不进这个名单——真问到了就该给全。
     const skipDigest = hasQuery ? new Set() : tiredOf(floatLog)
     const cooldown = cooldownOf(floatLog)
-    const recalled = hasQuery ? recall({ records: viewed, query, now, limit: 3, cooldown }) : []
-    const picks = hasQuery
-      ? recalled.map((hit) => hit.record)
+    const recalled = hasQuery
+      ? recall({ records: viewed, query, now, limit: FLOATING_LIMIT, cooldown })
+      : []
+    /**
+     * 统一 10 条 + 配额（2026-11-12，主人拍板）。
+     *
+     * 以前有问句只召回 3 条、且配额全失效——一说话，「要求保底 2」就丢了。
+     * 现在：召回的排前面（相关），其余按强度/重要度排后面，再套配额
+     * （事件≤1、要求≥2、脾性≥1、其余自由抢）。两种模式不再分裂。
+     */
+    const recalledIds = new Set(recalled.map((hit) => hit.record.id))
+    const floatable = viewed.filter((r) => isFloatable(r))
+    const ranked = hasQuery
+      ? recalled.map((hit) => hit.record).concat(floatable.filter((r) => !recalledIds.has(r.id)))
       : pickFloating(viewed, { cooldown, lastSeq: floatLog.recent })
+    const picks = pickWithQuota(ranked, { limit: FLOATING_LIMIT })
     // 字面全对不上时给的是弱候选，必须说出来，不许冒充命中。
     const weakCaution = recalled.some((hit) => hit.weak)
       ? '上面这几条咱没十足把握，是按最像的猜的；要准的给咱点线索（谁、什么时候、什么事）'
@@ -373,6 +412,12 @@ let workshopCache = ''
 
     // 这轮的提醒：收工写日记；自述攒够日子没动也提一句。两句都很短，别占预算。
     const hintParts = []
+    if (todayAll.length > today.length) {
+      hintParts.push('今天更早的事不在上面——要翻就 benwo_recall recent=2（最近两天的日记）。')
+    }
+    if (todayNudge) {
+      hintParts.push('今天流水有阵子没记了——这轮有值得落一条的？要写就 benwo_write。')
+    }
     const wrapUp = HINT_WRAP_UP.test(String(query || ''))
     const selfDays = SELF_NUDGE_DAYS
     let selfDue = false
@@ -382,7 +427,7 @@ let workshopCache = ''
       selfDue = !lastSelf || daysBetween(lastSelf, dayOf(now)) >= selfDays
     }
     if (wrapUp) {
-      hintParts.push('主人要收工了。写一篇日记再走（benwo_self write，where 缺省就是日记），别记流水。')
+      hintParts.push('主人要收工了。先翻今天的流水和今天写的记忆，再写日记（benwo_self write，where 缺省就是日记）——没进日记的重要事补上，别记流水。')
       if (selfDue) hintParts.push(lastSelf ? `自述也停在 ${lastSelf} 了，想写就写。` : '自述还空着，想写就写。')
     } else if (selfDue) {
       hintParts.push(lastSelf ? `自述停在 ${lastSelf}，有日子没动了。想写就写。` : '自述那几页还空着，想写就写。')
@@ -633,11 +678,46 @@ let workshopCache = ''
         currentTurn = payload.turn
         turnLongWrites = 0
         const messages = Array.isArray(payload.messages) ? payload.messages : []
+        /**
+         * 「今天」提醒：**干活的轮才累计轮数**，聊天不算。
+         *
+         * 主人定的：工作 10～12 轮合理；纯聊天按轮数会变流水账，只按 60 分钟。
+         * 判据用「上一轮有没有 tool-call」——调了工具就是干活，纯嘴聊不累计。
+         * 60 分钟对所有场景都算（聊天/绘图/别的都兜得住）。
+         */
+        const lastAssistant = [...messages].reverse().find((m) => m && m.role === 'assistant')
+        const workedLastTurn =
+          Array.isArray(lastAssistant && lastAssistant.content) &&
+          lastAssistant.content.some((part) => part && part.type === 'tool-call')
         const lastUser = [...messages].reverse().find((m) => m && m.role === 'user')
         const query = textOfMessage(lastUser)
         if (query) lastQuery = query
 
         await syncPresence(payload.agent)
+        /**
+         * 「今天」提醒（2026-11-12，按**工作区**数）：
+         *
+         * - 干活的轮才 +1（上一轮有 tool-call）；纯聊天不算，免得聊十轮就变流水账；
+         * - 阈值：同一个工作区 ≥10 轮，或距上一条今天 ≥60 分钟（都算）；
+         * - 计数存 state.json，重载/重启不清零。
+         */
+        try {
+          const st = await readState(L).catch(() => ({}))
+          const day = dayOf(new Date())
+          const tt = st.todayTurns && st.todayTurns.day === day ? st.todayTurns : { day, byWorkspace: {} }
+          const key = String(currentCwd || '').toLowerCase() || '默认'
+          if (workedLastTurn) tt.byWorkspace[key] = (tt.byWorkspace[key] || 0) + 1
+          await writeState(L, { ...st, todayTurns: tt })
+          turnsSinceToday = tt.byWorkspace[key] || 0
+          const todayEntries = await readTodayEntries(L, day).catch(() => [])
+          const lastRaw = todayEntries.length ? todayEntries[todayEntries.length - 1].time : ''
+          const lastAt = lastRaw ? new Date(lastRaw).getTime() : 0
+          const minutes =
+            Number.isFinite(lastAt) && lastAt > 0 ? Math.floor((Date.now() - lastAt) / 60000) : 99999
+          todayNudge = turnsSinceToday >= 10 || minutes >= 60
+        } catch {
+          todayNudge = false
+        }
         if (!active) {
           personaCache = ''
           memoryCache = ''
@@ -928,6 +1008,16 @@ let workshopCache = ''
           },
           now,
         )
+        turnsSinceToday = 0
+        try {
+          const st = await readState(L).catch(() => ({}))
+          const day = dayOf(now)
+          const tt = st.todayTurns && st.todayTurns.day === day ? st.todayTurns : { day, byWorkspace: {} }
+          tt.byWorkspace[String(currentCwd || '').toLowerCase() || '默认'] = 0
+          await writeState(L, { ...st, todayTurns: tt })
+        } catch {
+          // 清零失败不影响记忆写入
+        }
         await refresh()
         dbg('write today ' + draft['名'])
         const directKind = DIRECT_KINDS.includes(String(args.kind || ''))
@@ -943,7 +1033,8 @@ let workshopCache = ''
     },
     {
       name: 'benwo_settle',
-      description: '手动结算一次：按「上次」到现在的时间差，把每条记忆的强度算出来并写回。幂等，重复调不会算错。',
+      description:
+        '手动结算一次：按「上次」到现在的天数，把每条记忆的强度重新算出来并写回；顺带清掉「计划已完成满 30 天」「已内化满 30 天」的，并报出可能打架的要求（只报嫌疑，不自动改）。幂等，重复调不会算错。',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
       output: TEXT_OUTPUT,
       async execute() {
@@ -1239,7 +1330,7 @@ let workshopCache = ''
     {
       name: 'benwo_skill',
       description:
-        '经验层（怎么干活）。list 按分类列出来；read 翻正文；find 按当前问题找能用的；save 存一条；use 记一次「真用上了」。记忆绑人，经验不绑人——这条可以给雪奈看。',
+        '经验层（怎么干活）。list 按分类列出来（可选 category）；read 翻正文；find 按当前问题找能用的（不传 query 就用这一轮主人说的话）；save 存一条（同分类同名会覆盖，保留「用到」次数和常驻状态）；use 记一次「真用上了」；pin / unpin 设不设常驻（常驻才会每轮在注入里露一行名字）。记忆绑人，经验不绑人——这条可以给雪奈看。',
       parameters: {
         type: 'object',
         properties: {
@@ -1365,7 +1456,7 @@ let workshopCache = ''
     },
     {
       name: 'benwo_chain',
-      description: '验连续性链。断了会说出是第几截，并且应停下不干活。',
+      description: '验连续性链。链是好的就回一句；断了会说出第几截、为什么断——这时应停下不干活，先让人看。',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
       output: TEXT_OUTPUT,
       async execute() {
@@ -1376,7 +1467,7 @@ let workshopCache = ''
     },
     {
       name: 'benwo_status',
-      description: '看一眼核现在什么状态：多少条、今天几条、记忆段占了多少字、链通不通。',
+      description: '看一眼核现在什么状态：长期多少条、今天流水几条、记忆段超没超预算、本轮召回几条、未巩固权重够不够整理、链通不通。',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
       output: TEXT_OUTPUT,
       async execute() {
@@ -1409,14 +1500,19 @@ let workshopCache = ''
   const recallTool = {
     name: 'benwo_recall',
     description:
-      '主动查记忆。给一句话或几个词，它去翻：长期记忆、今天流水、认识，再用命中记忆的日期去定位那几天的日记（日记只取正文，不进每轮注入）。记不清具体日期也能用——记忆带着日期。',
+      '主动查记忆，翻四样：长期记忆、认识层、日记、今天流水。给一句话或几个词，先按字面召回长期记忆和认识；再用命中记忆的日期（首次 / 来源 / 上次 ±1 天）去点那几天的日记；词全没对上时给保底——最近两天的日记首行 + 今天流水最后几条。日记和今天流水都只读正文，不进每轮注入。今天的事先看注入里的【今天记录】；要问更早的今天或昨天，传 recent=2。',
     parameters: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: '要查什么。一句话或几个词都行，例如「十月份做不忘」「跑图全白那事」。' },
+        query: { type: 'string', description: '要查什么。一句话或几个词都行，例如「十月份做不忘」「跑图全白那事」、或「今天上午干了什么」。' },
         limit: { type: 'number', description: '最多给几条记忆，默认 6。' },
         diary: { type: 'boolean', description: '要不要顺手圈出那几天的日记，默认 true。' },
         full: { type: 'boolean', description: '日记要不要给全文（默认只给首行）。' },
+        recent: {
+          type: 'number',
+          description:
+            '只看最近几天的日记（1-7）。问「昨天/今天」的细节时用，例如 recent=2。不传就按记忆里的日期去圈。',
+        },
       },
       required: ['query'],
       additionalProperties: false,
@@ -1426,6 +1522,7 @@ let workshopCache = ''
       if (!ready) return notReady()
       const query = String((args && args.query) || '').trim()
       if (!query) return { text: '要给一句话或几个词才能查。' }
+      const recent = Math.max(0, Math.min(7, Number(args.recent) || 0))
       const out = await searchAll(L, {
         query,
         limit: Math.max(1, Math.min(20, Number(args.limit) || 6)),
@@ -1459,6 +1556,37 @@ let workshopCache = ''
       } else if (args.diary !== false) {
         lines.push('', '没有圈到对应日期的日记。')
       }
+
+      /**
+       * 最近两天（或 recent 天）的日记（2026-11-12）。
+       *
+       * 两条触发：显式要（recent>0），或者上面什么都没对上（保底）。
+       * 保底存在的理由：长期沉底、或那天没记进长期时，记忆和锚点都圈不到——
+       * 但「昨天/今天发生了什么」这件事本身，日记里有。
+       */
+      const empty = out.hits.length === 0 && out.knowHits.length === 0
+      if (recent > 0 || empty) {
+        const days = recent > 0 ? recent : 2
+        const shown = new Set(out.diaries.map((page) => page.day))
+        const pages = (await diariesRecent(L, new Date(), days)).filter((page) => !shown.has(page.day))
+        const why = empty ? '没对上关键词，这是最近的记录' : `你要的最近 ${days} 天`
+        if (pages.length) {
+          lines.push('', `最近 ${days} 天的日记（${why}）：`)
+          for (const page of pages) {
+            lines.push(`- ${page.day}  ${headOf(await readPage(page.file))}`)
+          }
+        } else if (empty) {
+          lines.push('', `最近 ${days} 天没有日记。`)
+        }
+        if (empty) {
+          const today = await readToday(L, dayOf(new Date())).catch(() => [])
+          const tail = today.slice(-3)
+          if (tail.length) {
+            lines.push('', '今天流水最后几条：')
+            for (const row of tail) lines.push('· ' + row)
+          }
+        }
+      }
       return { text: lines.join('\n') }
     },
   }
@@ -1467,7 +1595,7 @@ let workshopCache = ''
   const selfTool = {
     name: 'benwo_self',
     description:
-      '日记和自述。日记＝按天记的日子（主人道晚安、说下线时写一篇；或攒够一段、出了大事才写，别记流水），落在 日记/YYYY-MM-DD.md。自述＝完全咱自己做主的那几页，想写什么写什么，自己起标题。action：list / read / write；where 选 日记 或 自述（默认日记）。两者都不进检索、不进注入，隐私模式下照写。',
+      '日记和自述。日记＝按天记的详细档案：收工时写，先翻当天流水和当天记忆、自己过一遍哪些没进日记，把重要的补上（只加不改）；一篇要有发生了什么、和主人说了什么、心里怎么想。自述＝自由页：值得单开一页的事，或不想进日记的（太私密、太涩），想写才写、标题自己起。两者都不进检索、不进注入，隐私模式下照写。action：list / read / write；where 选 日记 或 自述（默认日记）。',
     parameters: {
       type: 'object',
       properties: {
@@ -1553,7 +1681,7 @@ let workshopCache = ''
   const presenceTool = {
     name: 'benwo_presence',
     description:
-      '在场登记。默认哪个工作区都不在场；认领之后才注入人格和记忆。list 看待认领状态；claim 认领当前工作区；release 解除；register 登记一个人格的住处。',
+      '在场登记。默认哪个工作区都不在场；认领之后才注入人格和记忆。list 看登记表和各工作区认领状态；claim 认领当前（或 path 指定）工作区；release 解除认领；register 登记一个人格的住处（root 必填，foundation 可选，不填用模板）；select 切换全局选中的人格。',
     parameters: {
       type: 'object',
       properties: {

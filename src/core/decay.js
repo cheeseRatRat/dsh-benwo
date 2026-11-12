@@ -142,13 +142,16 @@ export function settleRecord(record, now = new Date()) {
    * 以前这里无条件重算成 active/dormant，于是每轮惰性结算都把「被取代」冲掉：
    * 视图里那条又活过来，召回和注入照收；按一下「结算一下」更狠——永久写没，真复活。
    * 强度照算、照淡，但人判过的状态不许被算回去。
+   *
+   * 2026-11-12：当时只保护了「被取代」一个状态，同一天里「已完成 / 作罢 / 已内化」
+   * 照样被重算回 active——计划做完了，【要办的事】却一直挂着它。
+   * 现在凡是 DONE_STATUS 里的状态都原样保留，强度照淡。
    */
-  const status =
-    record['状态'] === '被取代'
-      ? '被取代'
-      : next < IMPORTANT_EXCEPTION.min
-        ? 'dormant'
-        : 'active'
+  const status = DONE_STATUS.has(record['状态'])
+    ? record['状态']
+    : next < IMPORTANT_EXCEPTION.min
+      ? 'dormant'
+      : 'active'
   return {
     ...record,
     '强度': Math.round(next * 10) / 10,

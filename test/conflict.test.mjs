@@ -58,6 +58,21 @@ await check("名字和模板标签不当共同词（2026-11-11 修）", () => {
   assert.equal(findConflicts([a, b]).length, 0, "只共享名字和模板标签，不该报嫌疑")
 })
 
+// 2026-11-12 回归：正文从「主人」改写成「羡渝渝」后，74 对假嫌疑原样回来。
+// 修法改成按出现频率过滤：高频词不承担区分作用，换名字也不会再犯。
+await check("高频主名不再制造假嫌疑（2026-11-12 修）", () => {
+  const list = []
+  for (let i = 0; i < 12; i += 1) {
+    list.push(req("n" + i, "普通要求" + i, "羡渝渝 说过第" + i + "件不相干的事。"))
+  }
+  list.push(req("p", "出图直接给图片不读图", "羡渝渝 说出图直接给图，不要读图。"))
+  list.push(req("q", "出图前先读图再给", "羡渝渝 说出图前先读图。"))
+  const pairs = findConflicts(list)
+  assert.equal(pairs.length, 1, "只该剩真矛盾那一对，实际 " + pairs.length)
+  const names = pairs.map((x) => x.a["名"] + "|" + x.b["名"]).join(" / ")
+  assert.ok(/出图/.test(names), "剩下那对得是真矛盾： " + names)
+})
+
 await check("「关于」字段存得住、读得回", async () => {
   const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), "benwo-about-"))
   const L = layout(tmp)

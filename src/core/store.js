@@ -578,6 +578,35 @@ export async function readTodayEntries(L, day) {
   }))
 }
 
+/**
+ * 「今天」的窗口（2026-11-12）：只取最近 N 小时，**夸零点也接上**。
+ *
+ * 为什么不再按「今天这个日期」切：0 点一过，昨晚的事立刻断掉；
+ * 而短期记忆要的是「最近这一段」——6 小时，跨天就把昨天尾巴一并读进来。
+ * 窗口外的老事不在这里，靠日记去翻（注入里会提一句）。
+ */
+export async function readTodayWindow(L, now = new Date(), hours = 6) {
+  const endMs = new Date(now).getTime()
+  const startMs = endMs - hours * 3600 * 1000
+  const days = new Set([dayOf(new Date(endMs))])
+  const startDay = dayOf(new Date(startMs))
+  if (startDay !== dayOf(new Date(endMs))) days.add(startDay)
+  const out = []
+  for (const day of days) {
+    for (const entry of await readTodayEntries(L, day).catch(() => [])) {
+      const t = entry.time
+        ? new Date(entry.time).getTime()
+        : entry.hhmm
+          ? new Date(`${day}T${entry.hhmm}:00`).getTime()
+          : NaN
+      if (!Number.isFinite(t) || t < startMs || t > endMs) continue
+      out.push({ ...entry, day, _t: t })
+    }
+  }
+  out.sort((a, b) => a._t - b._t)
+  return out
+}
+
 // ---------------------------------------------------------------- 上次（B1）
 
 /**

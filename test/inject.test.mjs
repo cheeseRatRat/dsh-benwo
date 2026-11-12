@@ -42,19 +42,23 @@ check('字数按汉字算', () => {
 })
 
 // ---- 今天段
-check('今天最多留六行', () => {
+check('今天按预算装，不再卡六行', () => {
   const lines = Array.from({ length: 10 }, (_, i) => `第 ${i} 件事`)
   const out = buildToday(lines)
-  assert.equal(out.lines.length, 6)
-  assert.equal(out.dropped, 4)
-  assert.ok(out.lines[0].includes('第 4 件事'), '留的是最近六行')
+  assert.ok(out.lines.length >= 8, '短条目该装得下更多，实际 ' + out.lines.length)
 })
-check('今天超预算就丢', () => {
-  const lines = Array.from({ length: 6 }, () => '一'.repeat(60))
-  const out = buildToday(lines, BUDGET_TODAY)
+check('今天超预算时先丢低重要的', () => {
+  const rows = Array.from({ length: 6 }, (_, i) => ({
+    hhmm: `0${i + 1}:00`,
+    text: '看见了什么：' + '一'.repeat(60),
+    importance: i === 0 ? 5 : 1,
+    _t: i,
+  }))
+  const out = buildToday(rows, BUDGET_TODAY)
   const total = charCount(out.lines.join('\n'))
   assert.ok(total <= BUDGET_TODAY, `实际 ${total}`)
-  assert.ok(out.dropped > 0)
+  assert.ok(out.dropped > 0, '应该丢掉一些低重要的')
+  assert.ok(out.lines.some((l) => l.includes('01:00')), '重要那条被丢了：' + out.lines.join(' | '))
 })
 
 // ---- 浮上来
@@ -67,7 +71,7 @@ check('按 强度+5×(重要度−3) 排', () => {
   assert.equal(order.length, 3)
 })
 check('最多三条', () => {
-  const many = Array.from({ length: 8 }, (_, i) => rec({ id: 'm' + i, '强度': 90 }))
+  const many = Array.from({ length: 14 }, (_, i) => rec({ id: 'm' + i, '强度': 90 }))
   assert.equal(rankFloating(many).length, FLOATING_LIMIT)
 })
 check('被取代的不上来', () => {
@@ -138,13 +142,12 @@ check('没有经验就不露这一行', () => {
   assert.ok(!out.text.includes('经验：'))
 })
 
-check('今天预算不够时，丢旧的、留新的', () => {
-  const long = (n) => `第${n}条` + 'x'.repeat(80)
+check('今天超预算时，同等重要的保新的', () => {
+  const long = (n) => ({ hhmm: `0${n}:00`, text: '看见了什么：' + 'x'.repeat(100), importance: 3, _t: n })
   const out = buildToday([long(1), long(2), long(3), long(4)])
-  assert.ok(out.lines.length >= 1, '一条都没留下')
-  const last = out.lines[out.lines.length - 1]
-  assert.ok(last.includes('第4条'), '最新那条被丢了：' + out.lines.join(' | '))
-  assert.ok(out.dropped > 0)
+  const total = charCount(out.lines.join('\n'))
+  assert.ok(total <= BUDGET_TODAY, '超预算了：' + total)
+  assert.ok(out.lines.some((l) => l.includes('04:00')), '最新那条被丢了：' + out.lines.join(' | '))
 })
 check('今天每条会截短，别让一条吃光预算', () => {
   const out = buildToday(['长'.repeat(400), '短句。'])

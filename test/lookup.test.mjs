@@ -18,7 +18,7 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { layout } from '../src/core/store.js'
-import { anchorsOf, diariesFor, headOf, searchAll } from '../src/core/lookup.js'
+import { anchorsOf, diariesFor, diariesRecent, headOf, searchAll } from '../src/core/lookup.js'
 
 let passed = 0
 let failed = 0
@@ -132,6 +132,26 @@ await check('日记不进注入：lookup 不许出现在 buildMemoryBlock', () =
   const injectSrc = fs.readFileSync(path.resolve(here, '..', 'src', 'core', 'inject.js'), 'utf8')
   assert.ok(!/lookup/i.test(injectSrc), '注入层不该认识 lookup——日记只按需查')
   assert.ok(!/diar/i.test(injectSrc), '注入层不该碰日记')
+})
+
+await check('最近两天的日记：按时间圈，不看锚点（2026-11-12）', async () => {
+  const tmp2 = await fsp.mkdtemp(path.join(os.tmpdir(), 'benwo-recent-'))
+  const L2 = layout(tmp2)
+  await fsp.mkdir(L2.diary, { recursive: true })
+  for (const [day, summary] of [
+    ['2026-11-09', '前天的'],
+    ['2026-11-11', '昨天的'],
+    ['2026-11-12', '今天的'],
+    ['2026-11-12-2', '今天第二篇'],
+  ]) {
+    await fsp.writeFile(path.join(L2.diary, `${day}.md`), `---\nsummary: ${summary}\n---\n正文\n`, 'utf8')
+  }
+  const now = new Date('2026-11-12T21:00:00+08:00')
+  const two = await diariesRecent(L2, now, 2)
+  assert.deepEqual(two.map((p) => p.day), ['2026-11-11', '2026-11-12', '2026-11-12-2'], '最近两天：' + two.map((p) => p.day))
+  const one = await diariesRecent(L2, now, 1)
+  assert.deepEqual(one.map((p) => p.day), ['2026-11-12', '2026-11-12-2'], '只圈今天')
+  await fsp.rm(tmp2, { recursive: true, force: true })
 })
 
 await fsp.rm(tmp, { recursive: true, force: true })

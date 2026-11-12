@@ -17,10 +17,20 @@ import { injectable, phraseFor, isAlive } from './decay.js'
  *
  * 记忆以后涨到几百条，**不要指望靠涨这个数解决**：条数恒定（浮上恒 6 条），
  * 靠的是挑得准（别名、时间分层、索引），不是塞得多。
+ *
+ * 2026-11-12：1050 → 1150。原因不是「想塞更多」，是 8 条名额实际装不下——
+ * 认识多、今天多时，统一裁剪总从【相关记忆】尾巴丢，「名额 8」成了名义 8。
+ * 多出的 100 字给【相关记忆】兜底，让它能真装到 8 条。
  */
-export const BUDGET_TOTAL = 1050
+export const BUDGET_TOTAL = 1150
 export const BUDGET_TODAY = 300
-export const BUDGET_FLOATING = 400
+/**
+ * 【相关记忆】的块内预算。
+ *
+ * 2026-11-12：400 → 480。实测 8 条名额时 400 字只装得下 5 条——
+ * 名额 8 是名义 8，字数把它卡住了。8 条 × 平均 60 字 = 480，刚好坐满。
+ */
+export const BUDGET_FLOATING = 480
 /**
  * 浮上条数（2026-11-09 从 3 提到 6）。
  *
@@ -31,25 +41,33 @@ export const BUDGET_FLOATING = 400
  * 头两条给摘要，后面只给标题行——预算没变，覆盖面积翻倍。
  */
 /**
- * 浮上几条（2026-11-10 夜定，主人调的配额）。
+ * 浮上几条（2026-11-10 夜定配额；2026-11-12 主人拍板扩到 10 条）。
  *   事件 最多 1 条 —— 事件要靠具体词才浮，不该占太多位置
- *   要求 保底 2 条 —— 「你让咱怎么做」得一直在
- *   自己 保底 2 条 —— 咱是什么样的人（有货才给，不硬凑）
- *   其余 3 条自由抢：事实 / 约定 / 愿望
+ *   要求 保底 2 条 —— 「你让咱怎么做」得一直在（按关键词优先，凑不够再用强的补）
+ *   脾性 保底 1 条 —— 咱是什么样的人（2026-11-12 从 2 降到 1：实际只有 1 条，保 2 是空话）
+ *   其余 6 条自由抢：事实 / 约定 / 愿望 / 事件补位
+ *
+ * 为什么扩到 10：8 条时「保底 4 + 剩余 4」太少，真正相关的常被挤掉。
+ * 10 条每轮约 550～650 token——一天 100 轮也就多一两分钱，值。
  */
-export const FLOATING_LIMIT = 8
+export const FLOATING_LIMIT = 10
 /** 事件在浮上里最多占几条。 */
 export const EVENT_CAP = 1
 /** 要求保底几个位置。 */
 export const REQUIRE_MIN = 2
-/** 「脾性」保底几个位置（没货就不占）。 */
-export const SELF_MIN = 2
-/** 前几条给一句摘要。 */
-export const DIGEST_TOP = 2
-/** 摘要最多多少字。 */
-export const DIGEST_MAX = 48
-/** 浮上每条标题行最多多少字——六条要挤进 400 字，长名字必须掐。 */
-export const HEAD_MAX = 36
+/** 「脾性」保底几个位置（没货就不占）。2026-11-12：2 → 1，实际只有 1 条。 */
+export const SELF_MIN = 1
+/**
+ * 前几条给一句摘要。
+ *
+ * 2026-11-12：2 → 1。8 条挤 400 字时，第 2 条的摘要正是那 30～40 字把第 8 条挤掉的东西。
+ * 只给第 1 条摘要，其余标题行——覆盖面积不降，名额先坐满。
+ */
+export const DIGEST_TOP = 1
+/** 摘要最多多少字。2026-11-12：48 → 36，给 8 条腾位置。 */
+export const DIGEST_MAX = 36
+/** 浮上每条标题行最多多少字——八条要挤进 480 字，长名字必须掐。 */
+export const HEAD_MAX = 30
 export const TODAY_LIMIT = 6
 /** 今天每行最多这么多字：一条长记录不该把整段预算吃光。 */
 export const LINE_MAX_TODAY = 88
@@ -61,8 +79,9 @@ export const BUDGET_PINNED = 12000
  * 这是「咱大概是个什么样的人」，带依据的结论。跟记忆不是一回事：
  * 记忆是「发生过什么」，认识是「所以咱是这样」。
  * 从 650 字总预算里挤，不额外加钱——多带一个字就少带一条记忆。
+ * 2026-11-12：150 → 200。认识攒到 4 条时，150 字只装得下 3 条，第 4 条永远浮不上。
  */
-export const BUDGET_KNOWLEDGE = 150
+export const BUDGET_KNOWLEDGE = 200
 /**
  * 「上次」摘要（B1）：跨天的连续性。
  *
@@ -109,8 +128,10 @@ export const BUDGET_HINT = 90
  * 动态计数放在 system prompt 靠前的段里，每写一条记忆就变一次，
  * 会让整个请求前缀失去 provider 的 KV cache。
  * 所以它只能进运行期尾部，绝不能进人格段。
+ *
+ * 2026-11-12：160 → 100。实测它只有两行（自己长 + 见面），160 是空转。
  */
-export const BUDGET_STATUS = 160
+export const BUDGET_STATUS = 100
 
 /** 按码点算字数，一个汉字算一个。 */
 export function charCount(text) {
@@ -144,18 +165,43 @@ function clipped(line, budget) {
   return chars.slice(0, Math.max(0, budget - 1)).join('') + '…'
 }
 
-/** 今天段：最多 6 行，超 250 字就从最早那行开始丢。每条只留一句，别让一条吃光整段。 */
-export function buildToday(lines = [], budget = BUDGET_TODAY) {
-  const kept = []
-  const recent = lines.slice(-TODAY_LIMIT)
-  // 从最新往回装：预算不够时丢的是旧的那头，不是刚写的。
-  for (let i = recent.length - 1; i >= 0; i -= 1) {
-    const candidate = `· ${clipped(String(recent[i]).trim(), LINE_MAX_TODAY)}`
-    const joined = [candidate].concat(kept).join('\n')
-    if (charCount(joined) > budget) break
-    kept.unshift(candidate)
+/**
+ * 今天段：最近 6 小时里的事（窗口由调用方按时间取好）。
+ *
+ * 2026-11-12 改：从「按日期、从最新往回装」改成「重要度 + 时间」——
+ * 超预算时先保重要的（≥3），再从新到旧补低重要的，最后**按时间顺序**摆出来。
+ * 这样「核完工」「怕把你丢了」不会因为排在早上就被挤掉，琐事会让位。
+ * 仍然兼容传字符串（老调用方/测试）。
+ */
+export function buildToday(items = [], budget = BUDGET_TODAY) {
+  const rows = items
+    .map((item) => {
+      if (item && typeof item === 'object') {
+        const text = String(item.text || '').trim()
+        if (!text) return null
+        const hhmm = String(item.hhmm || '').trim()
+        const prefix = hhmm ? `· ${hhmm} ` : '· '
+        const line = prefix + clipped(text, Math.max(20, LINE_MAX_TODAY - charCount(prefix)))
+        return { line, importance: Number(item.importance) || 3, order: Number(item._t) || 0 }
+      }
+      const text = String(item || '').trim()
+      if (!text) return null
+      return { line: `· ${clipped(text, LINE_MAX_TODAY)}`, importance: 3, order: 0 }
+    })
+    .filter(Boolean)
+
+  const fits = (list) => charCount(list.map((row) => row.line).join('\n')) <= budget
+  if (fits(rows)) return { lines: rows.map((row) => row.line), dropped: 0 }
+
+  const kept = rows.filter((row) => row.importance >= 3)
+  // 全是重要条目也装不下时，从最旧的丢——时间越新越该被看见。
+  while (kept.length > 1 && !fits(kept)) kept.shift()
+  const rest = rows.filter((row) => row.importance < 3)
+  for (let i = rest.length - 1; i >= 0; i -= 1) {
+    if (fits(kept.concat([rest[i]]))) kept.push(rest[i])
   }
-  return { lines: kept, dropped: lines.length - kept.length }
+  const ordered = kept.slice().sort((a, b) => a.order - b.order)
+  return { lines: ordered.map((row) => row.line), dropped: rows.length - ordered.length }
 }
 
 /**
@@ -344,7 +390,14 @@ function packFloating(picks = [], budget = BUDGET_FLOATING, { digestTop = DIGEST
     const head = phraseFor(record)
     if (!head) continue
     const stamp = stampOf(record)
-    const line1 = `- ${clipped(head, budget - 2)}${stamp ? ' · ' + stamp : ''}`
+    /**
+     * 标题行按 HEAD_MAX 掐（2026-11-12）。
+     *
+     * 以前这里写的是 `clipped(head, budget - 2)`——等于「几乎不截」，
+     * 一条长名字能占 100 多字，8 条名额被几条长名吃光，其余全丢。
+     * 这就是「名义 8 条」的真正根子：不是预算小，是没截。
+     */
+    const line1 = `- ${clipped(head, HEAD_MAX)}${stamp ? ' · ' + stamp : ''}`
     let block = line1
     const tired = record && record.id != null && skipDigest.has(String(record.id))
     if (index < digestTop && !tired) {

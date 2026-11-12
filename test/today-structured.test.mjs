@@ -14,7 +14,7 @@ import assert from 'node:assert/strict'
 import os from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs/promises'
-import { layout, appendToday, readToday, readTodayEntries, readLastSession, summarizeToday, dayOf } from '../src/core/store.js'
+import { layout, appendToday, readToday, readTodayEntries, readTodayWindow, readLastSession, summarizeToday, dayOf } from '../src/core/store.js'
 import { buildLast, buildMemoryBlock } from '../src/core/inject.js'
 
 let passed = 0
@@ -173,6 +173,24 @@ await check('「上次」：日期前缀和「看见了什么：」都要擦掉'
   assert.ok(!/看(见)?了什么/.test(text), '标签不许进摘要：' + text)
   assert.ok(!/〔/.test(text), '来源标记不许进摘要：' + text)
   assert.match(text, /主人说这扇窗以后只修图/)
+})
+
+await check('今天窗口只取最近 6 小时，夸零点接上昨天', async () => {
+  // 2026-11-12 23:30 一条 + 2026-11-13 00:10 一条；now = 13 日 00:40，6 小时窗从 12 日 18:40 起。
+  await appendToday(
+    L,
+    { id: 'late', name: '昨晚', kind: '事件', importance: 3, text: '看见了什么：昨晚的事。', source: '网页' },
+    new Date('2026-11-12T23:30:00+08:00'),
+  )
+  await appendToday(
+    L,
+    { id: 'early', name: '今晨', kind: '事件', importance: 3, text: '看见了什么：今晨的事。', source: '网页' },
+    new Date('2026-11-13T00:10:00+08:00'),
+  )
+  const win = await readTodayWindow(L, new Date('2026-11-13T00:40:00+08:00'), 6)
+  assert.equal(win.length, 2, '跨零点的两条都该在：' + win.length)
+  const far = await readTodayWindow(L, new Date('2026-11-13T12:00:00+08:00'), 6)
+  assert.equal(far.length, 0, '过了 6 小时窗口就不该再带')
 })
 
 await fs.rm(tmp, { recursive: true, force: true })

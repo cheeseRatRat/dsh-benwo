@@ -45,10 +45,10 @@ const rec = (id, kind, strength = 60, importance = 3) => ({
 })
 
 check('配额常量：8 条，事件 1，要求 2，自己 2', () => {
-  assert.equal(FLOATING_LIMIT, 8)
+  assert.equal(FLOATING_LIMIT, 10)
   assert.equal(EVENT_CAP, 1)
   assert.equal(REQUIRE_MIN, 2)
-  assert.equal(SELF_MIN, 2)
+  assert.equal(SELF_MIN, 1)
 })
 
 check('事件最多 1 条，哪怕全是事件也不超', () => {

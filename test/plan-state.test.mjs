@@ -13,7 +13,7 @@ import assert from 'node:assert/strict'
 import os from 'node:os'
 import path from 'node:path'
 import fsp from 'node:fs/promises'
-import { injectable, DONE_STATUS } from '../src/core/decay.js'
+import { injectable, DONE_STATUS, settleRecord } from '../src/core/decay.js'
 import { recall } from '../src/core/recall.js'
 import { layout, writeRecord, readAllRecords } from '../src/core/store.js'
 
@@ -108,6 +108,26 @@ await check('完成满 30 天的判据（date 差）', () => {
   const days = (a, b) => Math.round((new Date(b + 'T00:00:00') - new Date(a + 'T00:00:00')) / 86400000)
   assert.equal(days('2026-11-13', '2026-12-13'), 30, '满 30 天该清')
   assert.equal(days('2026-11-13', '2026-12-12'), 29, '29 天还不清')
+})
+
+/**
+ * 2026-11-12 回归：结算把「已完成」冲回 active。
+ *
+ * 11-09 那次只保护了「被取代」，其余 DONE_STATUS 会被 settleRecord 重算回 active。
+ * 真实现象：计划标完成后点「结算一下」，状态变回 active，【要办的事】继续挂着它。
+ */
+await check('结算不会把「已完成」冲回 active', () => {
+  const done = rec('p4', '计划', '已完成', { '计划': '', '完成': '2026-11-12 · 交了' })
+  const settled = settleRecord(done, new Date('2026-12-20T12:00:00+08:00'))
+  assert.equal(settled['状态'], '已完成', '完成后结算，状态必须保留')
+  assert.ok(Number(settled['强度']) < 80, '强度照常淡（不该被冻结）')
+})
+
+await check('结算也不会把「作罢 / 已内化」冲掉', () => {
+  for (const st of ['作罢', '已内化']) {
+    const settled = settleRecord(rec('r1', '要求', st), new Date('2026-12-20T12:00:00+08:00'))
+    assert.equal(settled['状态'], st, st + ' 被结算改了')
+  }
 })
 
 console.log(`计划与预期状态 ${passed} 通过 / ${failed} 失败`)
