@@ -10,7 +10,7 @@
  */
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { withLock, looksSecret } from './store.js'
+import { withLock, looksSecret, pruneBackups } from './store.js'
 import { isAlive } from './decay.js'
 
 export const EDITABLE_SECTIONS = ['语气', '称呼习惯', '偏好表达', '自述风格']
@@ -522,6 +522,8 @@ export async function applyEdit(L, { section, value, evidence = [], now = new Da
   const stamp = new Date(now)
   const backup = `${L.editable}.${stamp.toISOString().replace(/[:.]/g, '-')}.bak`
   await fs.copyFile(L.editable, backup)
+  // 只留最新一份（2026-11-20）：旧备份是同一件事的复读。
+  await pruneBackups(path.dirname(L.editable), /^可改层\.md\..+\.bak$/, path.basename(backup))
 
   const next = parsed.sections.map((s) => (s.title === section ? { ...s, body: String(value).trim() } : s))
   await fs.writeFile(L.editable, renderSections({ ...parsed, sections: next }), 'utf8')

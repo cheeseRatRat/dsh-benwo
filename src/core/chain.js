@@ -10,6 +10,11 @@ import path from 'node:path'
 import { withLock } from './store.js'
 
 export const CHAIN_FILE = 'chain.jsonl'
+/** 链攒到这么多行就归档（2026-11-20）。2000 行约 280KB，再长就该动一动了。 */
+export const ARCHIVE_AT = 2000
+/** 归档时当前文件里留多少行——新的一截总接得上，验链也不用每次翻归档。 */
+export const ARCHIVE_KEEP = 500
+const ARCHIVE_DIR = '链归档'
 
 export function fingerprint(text, size = 12) {
   return crypto.createHash('sha256').update(String(text), 'utf8').digest('hex').slice(0, size)
@@ -17,6 +22,11 @@ export function fingerprint(text, size = 12) {
 
 export function chainPath(L) {
   return path.join(L.status, CHAIN_FILE)
+}
+
+/** 归档目录：`状态\链归档\chain-<起始seq>-<结束seq>.jsonl`。 */
+export function archiveDir(L) {
+  return path.join(L.status, ARCHIVE_DIR)
 }
 
 /** 指纹串的规范形态：字段顺序写死，换顺序就是换指纹。 */
@@ -52,9 +62,74 @@ export async function readChain(L) {
     })
 }
 
+/**
+ * 归档：把最早的若干截挪到 `状态\链归档\`，当前文件只留尾巴。
+ *
+ * 2026-11-20 加。链只增不减，涨到 2000 行（约 280KB）就该动一动；
+ * 但链是完整性证据，**不能删**——所以是搬家，不是丢掉。
+ * 归档文件名带起止序号；验链时按序号把所有归档拼回来再验。
+ */
+export async function archiveChain(L, { at = ARCHIVE_AT, keep = ARCHIVE_KEEP } = {}) {
+  return withLock('chain', async () => {
+    const links = await readChain(L)
+    if (links.length <= at) return null
+    const cut = links.length - keep
+    if (cut <= 0) return null
+    const head = links.slice(0, cut)
+    const tail = links.slice(cut)
+    const start = head[0].seq
+    const end = head[head.length - 1].seq
+    const dir = archiveDir(L)
+    await fs.mkdir(dir, { recursive: true })
+    const file = path.join(dir, `chain-${start}-${end}.jsonl`)
+    await fs.writeFile(file, head.map((l) => JSON.stringify(l)).join('\n') + '\n', 'utf8')
+    await fs.writeFile(chainPath(L), tail.map((l) => JSON.stringify(l)).join('\n') + '\n', 'utf8')
+    return { file, start, end, moved: head.length }
+  })
+}
+
+/** 按起始序号排好归档文件。 */
+async function listArchives(L) {
+  const dir = archiveDir(L)
+  const out = []
+  let names = []
+  try {
+    names = (await fs.readdir(dir)).filter((name) => name.endsWith('.jsonl'))
+  } catch {
+    return out
+  }
+  const parsed = names
+    .map((name) => {
+      const m = name.match(/^chain-(\d+)-(\d+)\.jsonl$/)
+      return m ? { name, start: Number(m[1]), end: Number(m[2]) } : null
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.start - b.start)
+  for (const item of parsed) out.push({ file: path.join(dir, item.name), ...item })
+  return out
+}
+
+/** 当前文件 + 所有归档，按 seq 顺序拼成一条完整的链。 */
+export async function readAllChain(L) {
+  const all = []
+  for (const item of await listArchives(L)) {
+    const raw = await fs.readFile(item.file, 'utf8').catch(() => '')
+    for (const line of raw.split(/\r?\n/)) {
+      if (!line.trim()) continue
+      try {
+        all.push(JSON.parse(line))
+      } catch {
+        all.push({ seq: -1, broken: true, raw: line })
+      }
+    }
+  }
+  all.push(...(await readChain(L)))
+  return all
+}
+
 /** 追加一截。并发安全：读尾、算 prev、写，全在锁里。 */
 export async function appendLink(L, { 底子, 库, 条数 }, now = new Date()) {
-  return withLock('chain', async () => {
+  const link = await withLock('chain', async () => {
     const links = await readChain(L)
     const last = links[links.length - 1]
     const seq = last && Number.isFinite(last.seq) && last.seq > 0 ? last.seq + 1 : 1
@@ -70,6 +145,9 @@ export async function appendLink(L, { 底子, 库, 条数 }, now = new Date()) {
     await fs.appendFile(chainPath(L), JSON.stringify(link) + '\n', 'utf8')
     return link
   })
+  // 归档另起一次锁——上面那次已经写完，别在锁里套锁。
+  await archiveChain(L).catch(() => null)
+  return link
 }
 
 /**
@@ -92,9 +170,11 @@ export async function checkCurrent(L, { 底子, 库 }) {
 /**
  * 验链。返回 { ok, brokenAt, reason }。
  * brokenAt 是第几截（从 1 开始），给人看的。
+ *
+ * 2026-11-20：先读归档再读当前，拼成完整的一条来验——归档只是搬家，不是断链。
  */
 export async function verifyChain(L) {
-  const links = await readChain(L)
+  const links = await readAllChain(L)
   for (let i = 0; i < links.length; i += 1) {
     const link = links[i]
     if (link.broken) {

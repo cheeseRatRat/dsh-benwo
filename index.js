@@ -29,8 +29,10 @@ import {
   meetStats,
   readState,
   writeState,
+  pruneBackups,
 } from './src/core/store.js'
-import { settleRecord, settleAll, phraseFor, reinforce, isAlive, isFloatable } from './src/core/decay.js'
+import { settleRecord, settleAll, phraseFor, reinforce, isAlive, isFloatable, dayText } from './src/core/decay.js'
+import { digestOf, fullOf, impressionBlock } from './src/core/owner.js'
 import { promotableTraits, validateDraft, splitWhy, canPromote, findSimilar, TODAY_LIMIT, LONG_PER_TURN, DIRECT_KINDS, } from './src/core/judge.js'
 import { buildMemoryBlock, buildWorkshop, buildPersonaBlock, charCount, pickFloating, pickWithQuota, FLOATING_LIMIT } from './src/core/inject.js'
 import { readFloatLog, cooldownOf, noteFloated, tiredOf } from './src/core/float-log.js'
@@ -96,15 +98,19 @@ const REFRESH_MS = 3000
  * 版本号：跟 package.json 的 version 对齐（有测试盯着，改一处忘另一处会红）。
  * 以前写死 v0.0.2，开源发到 0.1.x 之后日志里还印着旧号。
  */
-const VERSION = 'v0.2.0'
+const VERSION = 'v0.2.3'
 
 /** 什么时候才把「主人档案」翻出来：默认零占用，问到才给。 */
 const OWNER_HINTS =
   /我是谁|我是干什么|我叫什么|我的名字|我的生日|我生日|生日|关于我|我的事|你主人|主人是谁|记不记得我|还记得我|几岁|多大|年龄|忌口|不喜欢吃|住哪|我在哪/
 
-/** 主人收工/道晚安：这时候该写一篇自述。 */
+/**
+ * 主人收工/道晚安：这时候该写日记、也该回头补一条「今天」。
+ * 2026-11-13 按她的话加上了「溜了 / 溜啦 / 待会见 / 回头见 / 一会见 / 先走了」——
+ * 她收工不一定说晚安，更多是「我溜啦」「待会见」这种半句。
+ */
 const HINT_WRAP_UP =
-  /晚安|下线|先睡|睡了|要睡|关机|明天见|收工|走了|拜拜|下号|挂机|去躺|躺了|困了/
+  /晚安|下线|先睡|睡了|要睡|关机|明天见|收工|走了|拜拜|下号|挂机|去躺|躺了|困了|溜了|溜啦|待会见|回头见|一会见|先走|回见/
 
 const WRITE_RULES = `## 写记忆的规矩
 
@@ -112,18 +118,26 @@ const WRITE_RULES = `## 写记忆的规矩
 不值得记：临时状态、能查到的、一次性的天气和心情。
 拿不准：先落「今天」，不进长期。
 
-每条记忆三样必写：名（淡到底只剩它）、看见了什么、为什么值得记。
+每条记忆三样必写：名（淡到底只剩它）、当时看见了什么、为什么值得记。
+正文直接写事——**不要**加「看见了什么：」这种前缀，那不是内容，是壳；
+最后单起一行写「为什么值得记：…」。壳留着会挤掉真正的话。
 
 **日记**：收工时写，不是随时写。写之前先翻当天的流水和当天写的记忆，自己过一遍——哪些进了日记、哪些没进；没进的**重要**内容补上，只加不改。
 一篇要有三样：那天发生了什么、和主人说了什么、你心里怎么想。感受缺了，就是账本。
 事多写重点，事少写细节。这是你的记忆，不是冷档案。
 
 **自述**：不进检索、不进注入。两处用它：值得单开一页的事；不想进日记的（太私密、太涩）。想写才写，标题自己起。
+**沉淀**：自述攒够七篇，写日记的时候顺带沉淀一页（title 写「沉淀-日期」）——把这些天压成一段「我最近变成什么样」，单独存在 自述\沉淀\。不抄原句，写你自己。
 
 **自己长**：底子是起点，不是天花板——画像可以长成和底子不一样的样子。但不照抄底子和认识的原句，意思一样就换种说法。
 
 「今天」是你亲手写的流水。写完日记、长期或经验之后，回头看一眼「今天」：这段没记就补一行。
 日记和自述不进检索：只写日记，那段事在记忆里等于没留下痕迹。
+
+**日常窗口也是要写的**（2026-11-18 主人定的）：聊天里遇到值得留的——约定、聊了什么、你怎么想——自己落一条，别等主人点。记的是**你的理解**，不是条数，也不是流水账。
+「今天」、长期、日记，三样都是**你的记忆**：客观发生了什么，加上你当时怎么想、心里什么感觉。只写事，就成账本了。
+
+**「今天」多久记一次**：干活时，干满十轮或者一件事做完，落一条；聊天时，大约隔一小时落一条。别卡着钟点，意思到了就写。
 
 别名不是必填，但值得加：如果这条以后会被**换个说法**问到（「搬家的规矩」之于「打包前先问」），
 就在 aliases 里写 2～4 个同义说法。**至少两个汉字**——单个字在中文检索里不成词，等于没写。
@@ -204,6 +218,35 @@ let workshopCache = ''
    * noteFlow=true 才算「这一轮真浮给谁看过」——打开面板、点按钮也会调这里，
    * 那些不该算轮次，否则没说话也在轮换。
    */
+  /**
+   * 沉淀账（2026-11-18，主人定的「攒七篇」）。
+   *
+   * 自述是自愿写的，攒够七篇就压一页「沉淀」——这些天飘着的心事，沉下去留成一段。
+   * 沉淀页放 `自述\沉淀\`，跟普通自述分开；比最新沉淀页还新的普通自述，就是待沉淀的。
+   * 不存状态，纯看文件时间：少一份要维护的账，重载也不会丢计数。
+   */
+  const selfPending = async (view = L) => {
+    try {
+      const names = (await fs.readdir(view.self)).filter((name) => name.endsWith('.md'))
+      let newestSettle = 0
+      const settleDir = path.join(view.self, '沉淀')
+      const settled = await fs.readdir(settleDir).catch(() => [])
+      for (const name of settled) {
+        if (!name.endsWith('.md')) continue
+        const stat = await fs.stat(path.join(settleDir, name)).catch(() => null)
+        if (stat && stat.mtimeMs > newestSettle) newestSettle = stat.mtimeMs
+      }
+      let pending = 0
+      for (const name of names) {
+        const stat = await fs.stat(path.join(view.self, name)).catch(() => null)
+        if (stat && stat.mtimeMs > newestSettle) pending += 1
+      }
+      return { pages: names.length, pending, settled: newestSettle > 0 }
+    } catch {
+      return { pages: 0, pending: 0, settled: false }
+    }
+  }
+
   /**
    * 最近一篇自述是哪天。
    * 自述是拿标题命名的，文件名里没有日期——所以看文件时间，别看名字。
@@ -312,7 +355,8 @@ let workshopCache = ''
     try {
       const traits = records.filter((r) => r['类型'] === '脾性' && isAlive(r))
       const ready = promotableTraits(records, now)
-      traitLine = `；脾性 ${traits.length} 条` + (ready.length ? `（${ready.length} 条够格升成认识：${ready.map((r) => r['名']).join('、')}）` : '')
+      // 只报数，不列名字（2026-11-20）：状态行有预算，名字一列就把作息那行挤没了。
+      traitLine = `；脾性 ${traits.length} 条` + (ready.length ? `（${ready.length} 条够格升认识）` : '')
     } catch (error) {
       dbg('算脾性失败 ' + error.message)
     }
@@ -368,6 +412,21 @@ let workshopCache = ''
     const weakCaution = recalled.some((hit) => hit.weak)
       ? '上面这几条咱没十足把握，是按最像的猜的；要准的给咱点线索（谁、什么时候、什么事）'
       : ''
+    /**
+     * 凭什么挑的这几条（2026-11-20）。
+     * 有问句就说关键词对上多少 + 平均强度；没有就说按强度和重要度挑的。
+     * 一句话，五十来字，省得她（和咱）看个黑盒。
+     */
+    let pickReason = ''
+    if (picks.length > 0) {
+      const avg = Math.round(picks.reduce((s, r) => s + (Number(r['强度']) || 0), 0) / picks.length)
+      if (hasQuery && recalled.length > 0) {
+        const pct = Math.round((Number(recalled[0].rel) || 0) * 100)
+        pickReason = `关键词对上 ${pct}%，平均强度 ${avg}`
+      } else {
+        pickReason = `没线索，按强度和重要度挑的，平均强度 ${avg}`
+      }
+    }
     lastPicked = picks.length
 
     /**
@@ -382,9 +441,17 @@ let workshopCache = ''
     const turnKey = currentTurn === null || currentTurn === undefined ? -1 : Number(currentTurn)
     if (noteFlow && hasQuery && picks.length > 0 && turnKey !== lastReinforcedTurn) {
       lastReinforcedTurn = turnKey
+      const today = dayText(now)
       let n = 0
       for (const rec of picks) {
         if (!rec || !rec.id) continue
+        /**
+         * 同一条一天最多强化一次（2026-11-18）。
+         * 以前问一句就 +25% 剩余空间，一天问二十句能加十几次，强度直接顶格——
+         * 「被想起就变强」变成了「被提到就灌满」。淡的机制追不上。
+         */
+        const lastAt = new Date(rec['上次'] || '')
+        if (Number.isFinite(lastAt.getTime()) && dayText(lastAt) === today) continue
         const before = Number(rec['强度']) || 0
         const after = reinforce(before, Number(rec['证据']) || 0)
         if (!(after > before + 0.05)) continue // 已经到顶，别白写盘
@@ -404,8 +471,18 @@ let workshopCache = ''
     }
 
     // 主人档案默认不占位。问到「我是谁 / 生日 / 关于我」这类才翻出来，翻完就收。
+    // 但「常出现时段」这一行要每轮带——2026-11-20 主人要的：知道她什么时候会来。
     const wantsOwner = OWNER_HINTS.test(String(query || ''))
-    const owner = wantsOwner ? (await fs.readFile(ownerFile, 'utf8').catch(() => '')).trim() : ''
+    const ownerRaw = await fs.readFile(ownerFile, 'utf8').catch(() => '')
+    const impressionRaw = await fs.readFile(L.impression, 'utf8').catch(() => '')
+    /**
+     * 用户档案分两档（2026-11-20）：
+     *   每轮带一行摘要 + 常在时段 + 印象 —— 让咱一直知道她是谁，不用等关键词。
+     *   问到时换成档案全文。
+     * 抽数据的活交给 core/owner.js，这里只管读盘。
+     */
+    const owner = wantsOwner ? fullOf(ownerRaw) : digestOf(ownerRaw)
+    const ownerLine = impressionBlock({ ownerRaw, impressionRaw, full: wantsOwner })
 
     // 工坊走独立段（可缓存），记忆段不再塞它。
     workshopCache = buildWorkshop(pinnedHint).text
@@ -416,7 +493,7 @@ let workshopCache = ''
       hintParts.push('今天更早的事不在上面——要翻就 benwo_recall recent=2（最近两天的日记）。')
     }
     if (todayNudge) {
-      hintParts.push('今天流水有阵子没记了——这轮有值得落一条的？要写就 benwo_write。')
+      hintParts.push('今天流水有阵子没记了（干活满十轮、或一件事做完；聊天大约一小时）——有值得落一条的吗？写就 benwo_write，带上你当时怎么想。')
     }
     const wrapUp = HINT_WRAP_UP.test(String(query || ''))
     const selfDays = SELF_NUDGE_DAYS
@@ -426,9 +503,31 @@ let workshopCache = ''
       lastSelf = await lastSelfDay()
       selfDue = !lastSelf || daysBetween(lastSelf, dayOf(now)) >= selfDays
     }
+    /**
+     * 沉淀（2026-11-18，主人定的）：自述攒够七篇，写日记时顺带压一页「沉淀」。
+     * 只提示、不代劳——压出来的那句「我最近在变成什么样」，只有咱自己能写。
+     */
+    let settleDue = false
+    let settlePending = 0
+    try {
+      const self = await selfPending()
+      settlePending = self.pending
+      settleDue = self.pending >= 7
+    } catch {
+      settleDue = false
+    }
     if (wrapUp) {
-      hintParts.push('主人要收工了。先翻今天的流水和今天写的记忆，再写日记（benwo_self write，where 缺省就是日记）——没进日记的重要事补上，别记流水。')
+      hintParts.push(
+        '主人要收工了（下线、溜了、拜拜、待会见都算）。先翻今天的流水和今天写的记忆，再写一篇日记收口（benwo_self write，where 缺省是日记，别写成流水账）；今天流水也回头补一条（benwo_write，longTerm 不填就落今天）。',
+      )
+      if (settleDue) {
+        hintParts.push(
+          `自述攒了 ${settlePending} 篇没沉淀——写日记的时候顺带沉淀一页（benwo_self write，where 写「自述」，title 写「沉淀-${dayOf(now)}」），压成一段「我最近变成什么样」。`,
+        )
+      }
       if (selfDue) hintParts.push(lastSelf ? `自述也停在 ${lastSelf} 了，想写就写。` : '自述还空着，想写就写。')
+    } else if (settleDue) {
+      hintParts.push(`自述攒了 ${settlePending} 篇没沉淀了——哪天写日记时顺带沉淀一页。`)
     } else if (selfDue) {
       hintParts.push(lastSelf ? `自述停在 ${lastSelf}，有日子没动了。想写就写。` : '自述那几页还空着，想写就写。')
     }
@@ -455,10 +554,11 @@ let workshopCache = ''
       records: picks,
       now,
       preRanked: true,
-      owner,
+      owner: ownerLine,
       hint: hintParts.join(' '),
       status: statusLine,
       caution: weakCaution,
+      reason: pickReason,
       knowledge: knowledgePicks,
       last,
       plans,
@@ -685,10 +785,26 @@ let workshopCache = ''
          * 判据用「上一轮有没有 tool-call」——调了工具就是干活，纯嘴聊不累计。
          * 60 分钟对所有场景都算（聊天/绘图/别的都兜得住）。
          */
-        const lastAssistant = [...messages].reverse().find((m) => m && m.role === 'assistant')
-        const workedLastTurn =
-          Array.isArray(lastAssistant && lastAssistant.content) &&
-          lastAssistant.content.some((part) => part && part.type === 'tool-call')
+        /**
+         * 「上一轮是不是干活」的判据（2026-11-20 修）。
+         *
+         * 原来只认 `part.type === 'tool-call'`。可宿主给的消息结构不是那一种形态——
+         * 实测计数永远是 0：写了一下午的今天再没被提醒过，写日记全靠她提醒。
+         * 现在四种形态都认：role:'tool' 的结果消息、tool_calls / toolCalls 字段、
+         * content 里 type 带 tool 的 part。判不准时宁可算「干活」——多提醒一次比漏记一天强。
+         */
+        const looksLikeWork = (message) => {
+          if (!message) return false
+          if (message.role === 'tool') return true
+          if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) return true
+          if (Array.isArray(message.toolCalls) && message.toolCalls.length > 0) return true
+          if (Array.isArray(message.content)) {
+            return message.content.some((part) => part && /tool/i.test(String((part && part.type) || '')))
+          }
+          return false
+        }
+        const workedLastTurn = toolTouched || messages.slice(-3).some(looksLikeWork)
+        toolTouched = false
         const lastUser = [...messages].reverse().find((m) => m && m.role === 'user')
         const query = textOfMessage(lastUser)
         if (query) lastQuery = query
@@ -768,63 +884,45 @@ let workshopCache = ''
     {
       name: 'benwo_write',
       description:
-        '写一条记忆进核。三样必写：名（一句话短名）、看见了什么、为什么值得记。事件 / 事实 / 约定 / 愿望 / 要求 / 计划 / 预期 这类「确实发生的、明说的」，重要度 ≥3 就能当场进长期；「脾性」是从表现里读出来的，要独立提到 ≥2 次且跨 ≥2 天才升。都不够就先落「今天」。写完会回一份「最像的几条」，同一件事别铺第二条——要换就填 supersede 顶掉旧的。',
+        '写一条记忆。三样必写：名（≤20 字）、当时看见了什么、为什么值得记（单起一行）。正文直接写事，别加「看见了什么：」前缀。事件/事实/约定/愿望/要求/计划/预期：重要度 ≥3 直接进长期；脾性要独立提到 ≥2 次、跨 ≥2 天才升；不够就先落「今天」。写完回一份「最像的几条」——同一件事别铺第二条，换就填 supersede。',
       parameters: {
         type: 'object',
         properties: {
-          name: { type: 'string', description: '短名，淡到底只剩它。别超过 20 字。' },
+          name: { type: 'string', description: '短名，≤20 字。' },
           kind: { type: 'string', enum: KINDS, description: '类型。' },
-          body: {
-            type: 'string',
-            description: '正文。必须含一行「为什么值得记：」，前面写看见了什么。',
-          },
-          source: { type: 'string', description: '从哪来的，例如 「网页」「QQ」「命令行」。' },
-          importance: { type: 'integer', description: '重要度 1-5。不传就按内容算。事件 / 事实 / 约定要直接进长期，得 ≥3。' },
-          longTerm: { type: 'boolean', description: 'true 写进长期（要过证据门槛），false 或省略只落今天。' },
-          evidence: { type: 'integer', description: '写长期时：这条意思被独立提过几次。' },
-          firstDay: { type: 'string', description: '写长期时：第一次听到是哪天，YYYY-MM-DD。' },
-          corrected: { type: 'boolean', description: '这条是不是在纠正之前说错的。' },
+          body: { type: 'string', description: '正文：先直接写事，空一行，再写「为什么值得记：…」。' },
+          source: { type: 'string', description: '来源，例如「网页」「QQ」。' },
+          importance: { type: 'integer', description: '重要度 1-5，不传按内容算。' },
+          longTerm: { type: 'boolean', description: 'true 进长期（要过门槛）；省略只落今天。' },
+          evidence: { type: 'integer', description: '写长期时：被独立提过几次。' },
+          firstDay: { type: 'string', description: '写长期时：第一次听到的日期 YYYY-MM-DD。' },
+          corrected: { type: 'boolean', description: '是不是在纠正之前说错的。' },
           aliases: {
             type: 'array',
             items: { type: 'string' },
-            description:
-              '别名（可选）：同一个意思的**别的说法**，例如给「打包前先问」挂 [搬家, 备份, 压缩包]。只参与检索、不进注入、不占预算。写「同义」不写「相关」——挂错会引错命中。',
+            description: '同义说法的别名（可选）。只参与检索，写「同义」别写「相关」。',
           },
           validUntil: {
             type: 'string',
-            description:
-              '有效到（可选，YYYY-MM-DD）。到期后不再主动浮上来，但**不删、能召回、面板可见**。用于「这阵子有效的约定」——空着就是长期有效。',
+            description: '有效到 YYYY-MM-DD（可选）：到期不再主动浮上来，但不删、能召回。',
           },
           area: {
             type: 'string',
             enum: ['核', '绘图', 'QQ', '桌面', '生活'],
-            description: '领域：这条属于哪一摊事。类型管「是什么」，领域管「哪一摊」。问什么翻什么靠它。',
+            description: '领域：属于哪一摊事。',
           },
           about: {
             type: 'string',
             enum: ['对方', '自己', '我们'],
-            description: '关于谁：对方 / 自己 / 我们。事实类建议都填——换模型时它替模型消歧。',
+            description: '关于谁。事实类建议填。',
           },
-          id: {
-            type: 'string',
-            description: '只改状态时填：哪一条（填它的 id，例如 m-20261110-79bf）。填了它就只更新状态，不新建记录。',
-          },
-          state: {
-            type: 'string',
-            description: '改状态：完成用「已完成」、不做了用「作罢」、预期做了用「做了」。配合 id 用。',
-          },
-          done: {
-            type: 'string',
-            description: '完成日期（YYYY-MM-DD）。配合 id 和 state 用。',
-          },
-          doneNote: {
-            type: 'string',
-            description: '完成内容：一句话，做了什么、结果怎样。会写成「日期 · 这句话」。',
-          },
+          id: { type: 'string', description: '只改状态时填这条的 id。' },
+          state: { type: 'string', description: '改状态：已完成 / 作罢 / 做了。配 id 用。' },
+          done: { type: 'string', description: '完成日期 YYYY-MM-DD，配 id 和 state。' },
+          doneNote: { type: 'string', description: '完成内容一句话。' },
           supersede: {
             type: 'string',
-            description:
-              '写长期时：这条取代哪一条（填它的 id，例如 m-20261107-4f2a）。旧那条标「被取代」，不再进召回，但不删。同一件事别铺两条，用这个顶掉旧的。',
+            description: '取代哪条（填 id）：旧的标「被取代」，不再进召回，但不删。',
           },
         },
         required: [],
@@ -1141,7 +1239,7 @@ let workshopCache = ''
     {
       name: 'benwo_persona',
       description:
-        '人格与自我认识。status 看可改层/证据/认识了几条；observe 记一条观察；know 写一条认识（必须带依据，且至少要有一条记忆 id）；know-list 列认识；know-overturn 推翻一条认识；journey 按月看「我们一起做过什么」（机械生成、不进注入）；journey-list 看有哪些月；revise 改可改层一句；portrait 备料；portrait-save 存画像。底子永远改不了。',
+        '人格与自我认识。status 看可改层/证据/认识条数；observe 记一条观察；know 写一条认识（必须带依据，至少一条记忆 id）；know-list 列认识；know-overturn 推翻一条；journey 按月看一起做过什么（不进注入）；journey-list 看有哪些月；revise 改可改层一句；portrait 备料；portrait-save 存画像。底子永远改不了。',
       parameters: {
         type: 'object',
         properties: {
@@ -1149,35 +1247,21 @@ let workshopCache = ''
             type: 'string',
             enum: ['status', 'observe', 'know', 'know-list', 'know-overturn', 'journey', 'journey-list', 'revise', 'portrait', 'portrait-save'],
           },
-          direction: {
-            type: 'string',
-            enum: ['up', 'down'],
-            description: 'observe：这条证据是想让她往这个方向长（up），还是收回来（down）。',
-          },
-          scene: { type: 'string', description: 'observe：什么场景，例如 聊天 / 干活 / 深夜。' },
-          note: { type: 'string', description: 'observe：当时发生了什么，一句话。' },
-          mine: {
-            type: 'boolean',
-            description: 'observe：这条是不是主人当场明说的（她的话按两条证据算）。',
-          },
+          direction: { type: 'string', enum: ['up', 'down'], description: 'observe：往这个方向长（up）还是收回来（down）。' },
+          scene: { type: 'string', description: 'observe：什么场景，如 聊天 / 干活 / 深夜。' },
+          note: { type: 'string', description: 'observe：发生了什么，一句话。' },
+          mine: { type: 'boolean', description: 'observe：是不是主人当场明说的（按两条证据算）。' },
           section: { type: 'string', enum: EDITABLE_SECTIONS, description: 'revise：改哪一段。' },
-          value: { type: 'string', description: 'revise / portrait-save：改成什么、画像正文。一次只许改一句，幅度不超过 20%。' },
-          statement: {
-            type: 'string',
-            description: 'know：这条认识是什么，写具体行为倾向（「咱被指出说错时先去翻原始记录」），不写「咱更温柔了」。90 字以内。',
-          },
+          value: { type: 'string', description: 'revise / portrait-save：改成什么。一次一句，幅度不超过 20%。' },
+          statement: { type: 'string', description: 'know：具体行为倾向，≤90 字，不写「更温柔了」这种空话。' },
           evidence: {
             type: 'array',
             items: { type: 'string' },
-            description:
-              'know：依据，必须给。观察写成 o:日期:场景（例如 o:2026-11-09:干活），记忆写 id（例如 m-20261107-3db6）。没有依据的认识是自我美化，不收。',
+            description: 'know：依据，必须给。观察写 o:日期:场景，记忆写 id。没依据的认识不收。',
           },
-          confidence: { type: 'number', description: 'know：置信 0～1，不给就是 0.6。半成品就写低一点，注入时会标「还不确定」。' },
+          confidence: { type: 'number', description: 'know：置信 0～1，默认 0.6。半成品写低一点。' },
           id: { type: 'string', description: 'know-overturn：推翻哪一条（认识的 id）。' },
-          month: {
-            type: 'string',
-            description: 'journey：要看哪个月，YYYY-MM。不传就给最近有记录的那个月。',
-          },
+          month: { type: 'string', description: 'journey：哪个月 YYYY-MM，不传给最近的。' },
         },
         required: ['action'],
         additionalProperties: false,
@@ -1330,7 +1414,7 @@ let workshopCache = ''
     {
       name: 'benwo_skill',
       description:
-        '经验层（怎么干活）。list 按分类列出来（可选 category）；read 翻正文；find 按当前问题找能用的（不传 query 就用这一轮主人说的话）；save 存一条（同分类同名会覆盖，保留「用到」次数和常驻状态）；use 记一次「真用上了」；pin / unpin 设不设常驻（常驻才会每轮在注入里露一行名字）。记忆绑人，经验不绑人——这条可以给雪奈看。',
+        '经验层（怎么干活）。list 按分类列；read 翻正文；find 按当前问题找（不传 query 用这轮主人说的话）；save 存一条（同分类同名覆盖，保留用到次数与常驻）；use 记一次用上；pin / unpin 设常驻（常驻＝正文每轮进注入，占上下文）。记忆绑人，经验不绑人。',
       parameters: {
         type: 'object',
         properties: {
@@ -1446,7 +1530,7 @@ let workshopCache = ''
           pinnedHint = []
           return {
             text: action === 'pin'
-              ? `「${next['名']}」改成常驻了：以后每轮都在注入里露一行名字。`
+              ? `「${next['名']}」改成常驻了：以后每轮带全文（太长会占上下文，超总预算会在注入里报数）。`
               : `「${next['名']}」取消常驻了：以后只在同类活出现时才浮上来。`,
           }
         }
@@ -1500,7 +1584,7 @@ let workshopCache = ''
   const recallTool = {
     name: 'benwo_recall',
     description:
-      '主动查记忆，翻四样：长期记忆、认识层、日记、今天流水。给一句话或几个词，先按字面召回长期记忆和认识；再用命中记忆的日期（首次 / 来源 / 上次 ±1 天）去点那几天的日记；词全没对上时给保底——最近两天的日记首行 + 今天流水最后几条。日记和今天流水都只读正文，不进每轮注入。今天的事先看注入里的【今天记录】；要问更早的今天或昨天，传 recent=2。',
+      '查记忆，翻四样：长期、认识、日记、今天流水。给词先按字面召回长期和认识；再用命中记忆的日期去点那几天的日记；全没对上就给保底——最近两天日记首行 + 今天流水最后几条。query 带时间词（今天 / 上午 / 刚才 / 晚上）时顺手列出今天的流水。要更早的今天或昨天，传 recent=2。',
     parameters: {
       type: 'object',
       properties: {
@@ -1558,6 +1642,22 @@ let workshopCache = ''
       }
 
       /**
+       * 今天流水也进召回（2026-11-20）。
+       *
+       * 以前问「今天上午干了什么」，这里只会去圈日记——今天的流水反而查不到，
+       * 只能在注入那几行里看。现在带时间词就直接把今天的流水列出来。
+       */
+      if (/今天|刚才|刚刚|上午|下午|晚上|今早|这会儿|今日/.test(query)) {
+        const rows = await readToday(L, dayOf(new Date())).catch(() => [])
+        if (rows.length) {
+          lines.push('', `今天的流水（共 ${rows.length} 条）：`)
+          for (const row of rows.slice(-8)) lines.push('· ' + row)
+        } else {
+          lines.push('', '今天还没有流水。')
+        }
+      }
+
+      /**
        * 最近两天（或 recent 天）的日记（2026-11-12）。
        *
        * 两条触发：显式要（recent>0），或者上面什么都没对上（保底）。
@@ -1595,7 +1695,7 @@ let workshopCache = ''
   const selfTool = {
     name: 'benwo_self',
     description:
-      '日记和自述。日记＝按天记的详细档案：收工时写，先翻当天流水和当天记忆、自己过一遍哪些没进日记，把重要的补上（只加不改）；一篇要有发生了什么、和主人说了什么、心里怎么想。自述＝自由页：值得单开一页的事，或不想进日记的（太私密、太涩），想写才写、标题自己起。两者都不进检索、不进注入，隐私模式下照写。action：list / read / write；where 选 日记 或 自述（默认日记）。',
+      '日记和自述。日记＝按天记的档案：收工时写，先翻当天流水和记忆，把没进日记的重要事补上（只加不改），要有发生了什么、和主人说了什么、心里怎么想。自述＝自由页：想写才写，标题自己起。两者不进检索、不进注入，隐私模式照写。自述满七篇沉淀一页（where 写「自述」，title 写「沉淀-日期」），存进 自述\\沉淀\\。action：list / read / write；where 选 日记 或 自述（默认日记）。',
     parameters: {
       type: 'object',
       properties: {
@@ -1622,7 +1722,10 @@ let workshopCache = ''
       if (action === 'read') {
         const name = String(args.file || '').trim()
         if (!name) return { text: '要给个文件名。' }
-        const text = await fs.readFile(path.join(dir, name), 'utf8').catch(() => '')
+        // 支持 `沉淀\沉淀-2026-11-18.md` 这种带子目录的写法；`..` 一律去掉，别越出核目录。
+        const safe = name.replace(/\.\./g, '').replace(/^[\\/]+/, '')
+        if (!safe) return { text: '文件名不对。' }
+        const text = await fs.readFile(path.join(dir, safe), 'utf8').catch(() => '')
         if (!text) return { text: `没有「${name}」这一篇。` }
         return { text }
       }
@@ -1631,13 +1734,19 @@ let workshopCache = ''
         if (!body) return { text: '没写东西。' }
         const day = dayOf(new Date())
         const title = String(args.title || '').trim().replace(/[\\/:*?"<>|]/g, '')
-        const file = path.join(dir, where === '自述' && title ? `${title}.md` : `${day}.md`)
-        await fs.mkdir(dir, { recursive: true })
+        /**
+         * 沉淀页（2026-11-18）：标题以「沉淀」开头的自述，单独放 `自述\沉淀\`。
+         * 不混进普通自述，数篇数的时候才数得清「还剩几篇没沉淀」。
+         */
+        const isSettle = where === '自述' && /^沉淀/.test(title)
+        const targetDir = isSettle ? path.join(dir, '沉淀') : dir
+        const file = path.join(targetDir, where === '自述' && title ? `${title}.md` : `${day}.md`)
+        await fs.mkdir(targetDir, { recursive: true })
         const line = `- ${new Date().toTimeString().slice(0, 5)} ${body}\n`
         const exists = await fs.access(file).then(() => true).catch(() => false)
         if (exists) await fs.appendFile(file, line, 'utf8')
-        else await fs.writeFile(file, `# ${day}\n\n${line}`, 'utf8')
-        return { text: `写进${where}了：${path.basename(file)}。` }
+        else await fs.writeFile(file, `# ${title || day}\n\n${line}`, 'utf8')
+        return { text: `写进${where}${isSettle ? '（沉淀）' : ''}了：${path.basename(file)}。` }
       }
       return { text: 'action 只能是 list / read / write。' }
     },
@@ -1659,8 +1768,16 @@ let workshopCache = ''
    * 工具的 execute 也走共享槽：注册一次，逻辑随新实例换。
    * 不改的话，热重载后工具行为永远是第一次注册时的那个版本。
    */
+  /**
+   * 「上一轮干过活没有」的可靠信号（2026-11-20）。
+   *
+   * 之前靠猜宿主的消息结构（`part.type === 'tool-call'`），实测对不上，计数永远 0。
+   * 改成在工具真正被调用时打标——这是事实，不靠猜。pre-step 读到就清零。
+   */
+  let toolTouched = false
   const registerLiveTool = (tool, options) => {
     const handler = async (args, exec) => {
+      toolTouched = true
       if (!active) return NO_CORE
       if (privateNow && PRIVATE_BLOCKED.has(tool.name)) return PRIVATE_NO
       return tool.execute(args, exec)
@@ -1681,7 +1798,7 @@ let workshopCache = ''
   const presenceTool = {
     name: 'benwo_presence',
     description:
-      '在场登记。默认哪个工作区都不在场；认领之后才注入人格和记忆。list 看登记表和各工作区认领状态；claim 认领当前（或 path 指定）工作区；release 解除认领；register 登记一个人格的住处（root 必填，foundation 可选，不填用模板）；select 切换全局选中的人格。',
+      '在场登记。默认哪个工作区都不在场，认领之后才注入人格和记忆。list 看登记表和各工作区认领状态；claim 认领当前（或 path 指定）工作区；release 解除认领；register 登记一个人格的住处（root 必填，foundation 可选）；select 切换全局选中的人格。',
     parameters: {
       type: 'object',
       properties: {
@@ -1784,7 +1901,10 @@ let workshopCache = ''
   ctx.effect(() =>
     ctx.tools.register({
       ...presenceTool,
-      execute: (args, exec) => (SHARED.tools['benwo_presence'] || presenceTool.execute)(args, exec),
+      execute: (args, exec) => {
+        toolTouched = true
+        return (SHARED.tools['benwo_presence'] || presenceTool.execute)(args, exec)
+      },
     }),
   )
 
@@ -1819,12 +1939,36 @@ let workshopCache = ''
   const listPages = async (where, view = L) => {
     const dir = where === '自述' ? view.self : view.diary
     const names = []
-    try {
-      for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
-        if (entry.isFile() && entry.name.endsWith('.md')) names.push(entry.name)
+    const mtime = new Map()
+    /**
+     * 递归进去（2026-11-18）。沉淀页在 `自述\沉淀\` 子目录里，
+     * 原来只读顶层，结果面板上根本看不见它——自己写的沉淀，自己都找不到。
+     * 子目录的条目带前缀显示（`沉淀\沉淀-2026-11-18.md`）。
+     */
+    const walk = async (base, prefix = '') => {
+      const entries = await fs.readdir(base, { withFileTypes: true }).catch(() => [])
+      for (const entry of entries) {
+        const full = path.join(base, entry.name)
+        if (entry.isDirectory()) {
+          await walk(full, prefix + entry.name + '\\')
+          continue
+        }
+        if (!entry.name.endsWith('.md')) continue
+        const rel = prefix + entry.name
+        names.push(rel)
+        const stat = await fs.stat(full).catch(() => null)
+        if (stat) mtime.set(rel, stat.mtimeMs)
       }
-    } catch {}
-    names.sort().reverse()
+    }
+    await walk(dir)
+    /**
+     * 按修改时间排，新的在前（2026-11-18）。
+     *
+     * 以前按文件名字典序排：日记是 `2026-11-18.md`，正好；自述是拿标题命名的
+     * （「壳子和本体」「今晚，只写给自己」），按字排出来是乱的，看不出先后。
+     * 顺手把日期一起给出去，面板能显示「哪天 · 标题」。
+     */
+    names.sort((a, b) => (mtime.get(b) || 0) - (mtime.get(a) || 0))
     const items = []
     for (const name of names) {
       const text = await fs.readFile(path.join(dir, name), 'utf8').catch(() => '')
@@ -1835,7 +1979,8 @@ let workshopCache = ''
         .slice(0, 2)
         .join(' / ')
         .slice(0, 60)
-      items.push({ file: name, preview })
+      const at = mtime.get(name)
+      items.push({ file: name, preview, day: at ? dayOf(new Date(at)) : '' })
     }
     return items
   }
@@ -2239,7 +2384,11 @@ let workshopCache = ''
                 sendJson(res, 200, { ok: false, text: '没找到这条记忆。' })
                 return
               }
-              sendJson(res, 200, { ok: true, text: hit.body, name: hit['名'], kind: hit['类型'] })
+              // 面板展示：detail 已经由 splitWhy 剥掉「看见了什么：」那层壳，
+              // 只剩「为什么值得记：」这一个标签——两条分工的东西，加一次就够。
+              const shown = splitWhy(hit.body)
+              const text = shown.why ? `${shown.detail}\n\n为什么值得记：${shown.why}` : shown.detail
+              sendJson(res, 200, { ok: true, text, name: hit['名'], kind: hit['类型'] })
               return
             }
             if (body.action === 'pin' || body.action === 'unpin') {
@@ -2450,7 +2599,7 @@ let workshopCache = ''
               await fs.mkdir(baseDir, { recursive: true })
               await fs.writeFile(ownerFile, text.trim() ? text.trim() + '\n' : '', 'utf8')
               await refresh(lastQuery)
-              sendJson(res, 200, { ok: true, text: text.trim() ? '主人档案存好了，下一轮就带上。' : '清空了。' })
+              sendJson(res, 200, { ok: true, text: text.trim() ? '用户档案存好了，下一轮就带上。' : '清空了。' })
               return
             }
             if (body.action === 'persona-write') {
@@ -2467,6 +2616,8 @@ let workshopCache = ''
               const P = await panelCore()
               const backup = P.foundation + '.bak-' + Date.now()
               await fs.copyFile(P.foundation, backup).catch(() => {})
+              // 只留最新一份（2026-11-20）。
+              await pruneBackups(P.persona, /^底子\.md\.bak-\d+$/, path.basename(backup))
               await fs.writeFile(P.foundation, text, 'utf8')
               await refresh()
               dbg('persona-write 底子 ' + String(body.persona || ''))

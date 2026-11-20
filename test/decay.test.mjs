@@ -93,15 +93,18 @@ check('单调不涨', () => {
 
 // ---- 回血
 check('回血按证据夹，最多五条', () => {
-  assert.equal(reinforce(40, 0), 55)
-  assert.equal(reinforce(40, 1), 40 + 60 * 0.3)
-  assert.equal(reinforce(40, 5), 70)
-  assert.equal(reinforce(40, 99), 70)
+  // 2026-11-18：每次回升从 25%~50% 降到 8%~18%——旧幅度几次就把老记忆灌到 95 顶格。
+  assert.equal(reinforce(40, 0), 44.8)
+  assert.equal(reinforce(40, 1), 46)
+  assert.equal(reinforce(40, 5), 50.8)
+  assert.equal(reinforce(40, 99), 50.8)
 })
 check('回血不超 95', () => assert.equal(reinforce(94, 5), CAP))
 check('回血对沉底的最好使', () => {
+  // 地板 3 一次回到 16.58：比原地不动多，但不再是一步弹回半血。
   const lifted = reinforce(FLOOR, 3)
-  assert.ok(lifted > 20, `从地板拉回来只有 ${lifted}`)
+  assert.ok(lifted > 15, `从地板拉回来只有 ${lifted}`)
+  assert.ok(lifted < 20, `从地板一次拉回太多：${lifted}`)
 })
 
 // ---- 档位

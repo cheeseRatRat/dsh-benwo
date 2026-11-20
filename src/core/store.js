@@ -38,6 +38,13 @@ export function layout(root) {
     foundation: path.join(root, '人格', '底子.md'),
     editable: path.join(root, '人格', '可改层.md'),
     portrait: path.join(root, '人格', '画像.md'),
+    /**
+     * 对用户的印象（2026-11-20）。
+     *
+     * 放核里、不放进家目录那份共用档案：印象是「这个人格怎么看用户」，
+     * 切到别的人格时不该读到蓝曦写的那些。
+     */
+    impression: path.join(root, '人格', '印象.md'),
     portraitHistory: path.join(root, '人格', '画像历史'),
     memory: path.join(root, '记忆'),
     today: path.join(root, '记忆', '今天'),
@@ -59,6 +66,42 @@ export function layout(root) {
     status: path.join(root, '状态'),
     state: path.join(root, '状态', 'state.json'),
   }
+}
+
+/**
+ * 只留最新一份备份（2026-11-20）。
+ *
+ * 以前每改一次人格就堆一份 `.bak`，人格目录攒到八份——备份是「回滚一次」用的，
+ * 第二份第三份只是复读。这里把「写新备份 → 删旧的」收成一个函数，
+ * 底子和可改层两处共用，免得两边各写一遍还写歪。
+ */
+export async function pruneBackups(dir, pattern, keep) {
+  let names = []
+  try {
+    names = await fs.readdir(dir)
+  } catch {
+    return 0
+  }
+  let removed = 0
+  for (const name of names) {
+    if (name === keep || !pattern.test(name)) continue
+    await fs.unlink(path.join(dir, name)).catch(() => {})
+    removed += 1
+  }
+  return removed
+}
+
+/**
+ * 剥掉正文开头那层「看见了什么：」。
+ *
+ * 那是写记忆时给自己加的标签，不是内容。早先每条都带，注入、面板、
+ * 「上次」摘要里全露出来——一行字被壳吃掉一截，读着也像没说完的半句。
+ * 2026-11-12 起新写的正文不再带壳；这个函数留给老数据兜底。
+ */
+export function stripSeenShell(text) {
+  return String(text == null ? '' : text)
+    .replace(/^\s*看(见)?了什么[：:]\s*/, '')
+    .trim()
 }
 
 // ---------------------------------------------------------------- 锁
@@ -452,9 +495,11 @@ export async function appendToday(L, entry, now = new Date()) {
    * 续行不以「- 」开头，readToday 看不见它们——人翻开流水，一条记录只剩前半句。
    * （结构化侧车那边 JSON 会把换行转义，反而是完整的，两边就对不上了。）
    */
-  const text = String(entry.text || '')
-    .trim()
-    .replace(/\s*\r?\n+\s*/g, ' ')
+  const text = stripSeenShell(
+    String(entry.text || '')
+      .trim()
+      .replace(/\s*\r?\n+\s*/g, ' '),
+  )
   const line = `- ${hhmmOf(now)} ${text}　〔${entry.source || '未知'}〕\n`
   /**
    * 结构化旁路（A4，2026-11-09）。
@@ -536,7 +581,15 @@ export async function readToday(L, day) {
   const file = path.join(L.today, `${day}.md`)
   try {
     const text = await fs.readFile(file, 'utf8')
-    return text.split(/\r?\n/).filter((line) => line.startsWith('- ')).map((line) => line.slice(2))
+    return text
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith('- '))
+      .map((line) => {
+        // 行是「HH:MM 正文」。时间要留着，壳只剥正文那一段。
+        const body = line.slice(2)
+        const at = body.match(/^(\d{2}:\d{2})\s*([\s\S]*)$/)
+        return at ? `${at[1]} ${stripSeenShell(at[2])}` : stripSeenShell(body)
+      })
   } catch {
     return []
   }

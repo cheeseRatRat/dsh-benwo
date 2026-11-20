@@ -44,7 +44,8 @@ check('工坊的常驻确实还在接（别把有用的也删了）', () => {
 
 check('人格段与记忆段的稳定性分工还在（A2）', () => {
   assert.ok(src.includes('buildPersonaBlock'), '人格段应该走 buildPersonaBlock')
-  assert.ok(src.includes('status: statusLine'), '会变的状态应该走记忆段的 status')
+  // 2026-11-20：状态行改成数组拼（前面多了一行「常出现时段」），所以匹配 status: 之后 80 字内出现 statusLine。
+  assert.ok(/status:\s*\[?[\s\S]{0,80}?statusLine/.test(src), '会变的状态应该走记忆段的 status')
 })
 
 console.log(`死变量不许复活 ${passed} 通过 / ${failed} 失败`)

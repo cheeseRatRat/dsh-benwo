@@ -78,8 +78,8 @@ await check('注入预算：记忆文档跟 BUDGET_* 常量一致', () => {
     `【相关记忆】行对不上（代码 ${BUDGET_FLOATING} 字 / ${FLOATING_LIMIT} 条）`,
   )
   assert.ok(
-    memory.includes(`| 【记录设置】 | ${BUDGET_STATUS} |`),
-    `【记录设置】预算对不上（代码 ${BUDGET_STATUS}）`,
+    memory.includes(`| 【状态】 | ${BUDGET_STATUS} |`),
+    `【状态】预算对不上（代码 ${BUDGET_STATUS}）`,
   )
 })
 

@@ -4,7 +4,7 @@
  * 「该不该记」归模型判断；「能不能写进去」归这里。模型热情起来一天写三十条，
  * 淡的机制追都追不上——所以闸必须长在代码里，不长在提示词里。
  */
-import { KINDS, looksSecret } from './store.js'
+import { KINDS, looksSecret, stripSeenShell } from './store.js'
 import { clampImportance, NEW_IMPORTANCE, parseTime, isAlive } from './decay.js'
 import { tokenSet } from './recall.js'
 
@@ -31,9 +31,10 @@ export const EVIDENCE_SPAN_DAYS = 2
 export function splitWhy(body) {
   const text = String(body || '')
   const at = text.indexOf(WHY_MARKER)
-  if (at < 0) return { detail: text.trim(), why: '' }
+  if (at < 0) return { detail: stripSeenShell(text), why: '' }
   return {
-    detail: text.slice(0, at).trim(),
+    // detail 顺手剥掉「看见了什么：」那层壳：那是标签，不是她看见的事。
+    detail: stripSeenShell(text.slice(0, at)),
     why: text.slice(at + WHY_MARKER.length).trim(),
   }
 }

@@ -61,8 +61,10 @@ await check('结构化条目：类型/重要度/id 都存下来了', async () =>
 await check('.md 流水一个字没变（人还能直接读）', async () => {
   const lines = await readToday(L, day)
   assert.equal(lines.length, 1)
-  assert.match(lines[0], /^\d{2}:\d{2} 看见了什么：这是一条测试。/)
+  assert.match(lines[0], /^\d{2}:\d{2} 这是一条测试。/)
   assert.match(lines[0], /〔网页〕$/)
+  // 2026-11-12：写的时候就把「看见了什么：」这层壳剥了——它是标签，不是内容。
+  assert.ok(!lines[0].includes('看见了什么'), lines[0])
 })
 
 await check('旁路是 jsonl，一行一条', async () => {
@@ -88,6 +90,23 @@ await check('老文件（只有 .md、没有 .jsonl）照样读得出来', async
   // 老的本来就没存类型/重要度，退回时是空——那不叫丢，因为从来没有过
   assert.equal(entries[0]['类型'], '')
   assert.equal(entries[0]['重要度'], null)
+})
+
+await check('老流水里的「看见了什么：」壳，读出来是剥掉的', async () => {
+  // 2026-11-12 以前每条正文都顶着这层壳。数据不动，读的时候兜底剥干净。
+  const legacyDay = '2026-10-31'
+  await fs.writeFile(
+    path.join(L.today, `${legacyDay}.md`),
+    `# ${legacyDay}\n\n- 22:48 看见了什么：主人说，壳里的话才是内容。　〔网页〕\n`,
+    'utf8',
+  )
+  const entries = await readTodayEntries(L, legacyDay)
+  assert.equal(entries.length, 1)
+  assert.equal(entries[0].hhmm, '22:48')
+  assert.match(entries[0].text, /^主人说，壳里的话才是内容。/)
+  assert.ok(!entries[0].text.includes('看见了什么'), entries[0].text)
+  // 收掉：这一天的文件不能被后面「没有历史就不留空块」那条看见。
+  await fs.unlink(path.join(L.today, `${legacyDay}.md`))
 })
 
 await check('坏 JSON 行不把整天读垮', async () => {

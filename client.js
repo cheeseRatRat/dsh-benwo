@@ -997,7 +997,7 @@ window.__ModuleLoader__.load({
                     }),
                     onClick: () => showSelf(item.file),
                   },
-                  h('span', { style: S.name }, item.file),
+                  h('span', { style: S.name }, (item.day ? item.day + '  ' : '') + item.file),
                   h(
                     'span',
                     {
@@ -1346,7 +1346,7 @@ window.__ModuleLoader__.load({
                       }),
                       onClick: () => show(item.file),
                     },
-                    h('span', { style: S.name }, (open === item.file ? '▾ ' : '') + item.file),
+                    h('span', { style: S.name }, (open === item.file ? '▾ ' : '') + (item.day ? item.day + '  ' : '') + item.file),
                     h(
                       'span',
                       {
@@ -1462,7 +1462,7 @@ window.__ModuleLoader__.load({
           resize: 'vertical',
         },
         placeholder:
-          '# 底子\n\n## 名字\n她叫什么。\n\n## 自称与称呼\n怎么自称，怎么叫主人。\n\n## 身份\n她是谁。\n\n## 底线\n不能破的那几条。',
+          '# 底子\n\n## 名字\n她叫什么。\n\n## 自称与称呼\n怎么自称，怎么称呼对方。\n\n## 身份\n她是谁。\n\n## 底线\n不能破的那几条。',
         value: newFoundation,
         onChange: (event) => setNewFoundation(event.target.value),
       }),
@@ -1475,8 +1475,8 @@ window.__ModuleLoader__.load({
   function SettingsOwnerCard({ busy, owner, setOwner, act, target }) {
     return h(
       Card,
-      { title: '主人是谁' },
-      h('div', { style: S.label }, '写在这里的东西会每轮带在人格后面（稳定的，不额外烧钱）。生日、称呼、忌口、雷区都行。'),
+      { title: '用户档案' },
+      h('div', { style: S.label }, '你（用户）是谁。写在下面的东西会每轮带一句摘要（从这几行自动抽，改了就跟着变）；蓝曦对你的印象存在核里的「人格\\印象.md」，切人格时各写各的。'),
       h('textarea', {
         style: {
           width: '100%',
@@ -1549,7 +1549,7 @@ window.__ModuleLoader__.load({
         h('button', { style: S.btn, disabled: busy, onClick: () => act('open') }, '打开核文件夹'),
       ),
       h('div', { style: S.label }, '备份会存到 ' + (settings.backupBase || '') ),
-      h('div', { style: S.label }, '里面是「核」整个文件夹 + 在场登记 + 家那一层的主人档案。换机器时把这份拷走，核就能原样站起来。'),
+      h('div', { style: S.label }, '里面是「核」整个文件夹 + 在场登记 + 家那一层的用户档案。换机器时把这份拷走，核就能原样站起来。'),
       h(
         'div',
         { style: Object.assign({}, S.label, { marginTop: '14px' }) },

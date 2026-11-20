@@ -62,7 +62,7 @@ check('会变的状态进了记忆段，没进人格段', () => {
     preRanked: true,
     status: '记录力度：中（一天 12 条）\n自己长：观察 3 条 / 2 天 / 2 场景',
   })
-  assert.match(block.text, /【记录设置】/)
+  assert.match(block.text, /【状态】/)
   assert.match(block.text, /记录力度：中/)
   assert.match(block.text, /观察 3 条/)
 })
@@ -70,7 +70,7 @@ check('会变的状态进了记忆段，没进人格段', () => {
 check('状态行有字数上限，不许把预算吃光', () => {
   const long = '记'.repeat(500)
   const block = buildMemoryBlock({ today: [], records: [], preRanked: true, status: long })
-  const line = block.text.split('【记录设置】')[1] || ''
+  const line = block.text.split('【状态】')[1] || ''
   assert.ok([...line].length <= BUDGET_STATUS + 2, `状态行 ${[...line].length} 字，超过 ${BUDGET_STATUS}`)
 })
 

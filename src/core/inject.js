@@ -7,6 +7,7 @@
  * 超预算从后往前整条丢，不切半句；丢了要报数，不许悄悄少给。
  */
 import { injectable, phraseFor, isAlive } from './decay.js'
+import { stripSeenShell } from './store.js'
 
 /**
  * 总盘（2026-11-10 夜上调：650 → 950）。
@@ -22,7 +23,7 @@ import { injectable, phraseFor, isAlive } from './decay.js'
  * 认识多、今天多时，统一裁剪总从【相关记忆】尾巴丢，「名额 8」成了名义 8。
  * 多出的 100 字给【相关记忆】兜底，让它能真装到 8 条。
  */
-export const BUDGET_TOTAL = 1150
+export const BUDGET_TOTAL = 1300
 export const BUDGET_TODAY = 300
 /**
  * 【相关记忆】的块内预算。
@@ -108,7 +109,7 @@ const HEAD_KNOWLEDGE = '【自我认识】'
  */
 const HEAD_DOING = '【要办的事】'
 const HEAD_WANT = '【未来想做】'
-const HEAD_OWNER = '【关于主人】'
+const HEAD_OWNER = '【用户印象】'
 const HEAD_HINT = '【提示】'
 /**
  * 记录档：记录力度 + 观察攒到哪一步。
@@ -116,7 +117,7 @@ const HEAD_HINT = '【提示】'
  * 以前叫【状态】，跟记忆条目的 `状态: active / dormant / 被取代` 撞了——
  * 同一个词两个意思，读注入时会混。2026-11-09 改名。
  */
-const HEAD_STATUS = '【记录设置】'
+const HEAD_STATUS = '【状态】'
 /** 主人档案一次最多带这么多字——问到就答全套，但别把预算吃光。 */
 export const BUDGET_OWNER = 300
 /** 提醒就一句，不许长篇。 */
@@ -177,14 +178,14 @@ export function buildToday(items = [], budget = BUDGET_TODAY) {
   const rows = items
     .map((item) => {
       if (item && typeof item === 'object') {
-        const text = String(item.text || '').trim()
+        const text = stripSeenShell(String(item.text || '').trim())
         if (!text) return null
         const hhmm = String(item.hhmm || '').trim()
         const prefix = hhmm ? `· ${hhmm} ` : '· '
         const line = prefix + clipped(text, Math.max(20, LINE_MAX_TODAY - charCount(prefix)))
         return { line, importance: Number(item.importance) || 3, order: Number(item._t) || 0 }
       }
-      const text = String(item || '').trim()
+      const text = stripSeenShell(String(item || '').trim())
       if (!text) return null
       return { line: `· ${clipped(text, LINE_MAX_TODAY)}`, importance: 3, order: 0 }
     })
@@ -445,7 +446,7 @@ export function buildWorkshop(pinnedFull = []) {
   return { text, chars: charCount(text), dropped }
 }
 
-export function buildMemoryBlock({ today = [], records = [], now = new Date(), preRanked = false, experience = '', pinned = [], pinnedFull = [], owner = '', hint = '', status = '', caution = '', knowledge = [], last = null, plans = [], wishes = [], skipDigest = new Set() } = {}) {
+export function buildMemoryBlock({ today = [], records = [], now = new Date(), preRanked = false, experience = '', pinned = [], pinnedFull = [], owner = '', hint = '', status = '', caution = '', reason = '', knowledge = [], last = null, plans = [], wishes = [], skipDigest = new Set() } = {}) {
   const t = buildToday(today)
   const f = preRanked ? buildFloatingOrdered(records, BUDGET_FLOATING, FLOATING_LIMIT, { skipDigest }) : buildFloating(records, BUDGET_FLOATING, FLOATING_LIMIT, { skipDigest })
   const k = buildKnowledge(knowledge)
@@ -498,6 +499,8 @@ export function buildMemoryBlock({ today = [], records = [], now = new Date(), p
   const statusLine = String(status || '').trim()
   // 「上面这几条咱没十足把握」——弱召回时必须说出来，不许冒充命中。
   const cautionLine = String(caution || '').trim()
+  // 「凭什么挑的这几条」——一句话，省得她（和咱）看个黑盒。
+  const reasonLine = String(reason || '').trim()
 
   // 计划只带最近的一条；预期只带一条。它们很小，且不会被裁剪顺序丢掉。
   const planLines = (Array.isArray(plans) ? plans : [])
@@ -512,25 +515,36 @@ export function buildMemoryBlock({ today = [], records = [], now = new Date(), p
     .map((name) => '- ' + clipped(name, HEAD_MAX))
 
   const assemble = () => {
+    /**
+     * 顺序按「变的频率」排（2026-11-20）。
+     *
+     * 缓存按 token 前缀命中：前面不变就能一直命中，一变后面全断。
+     * 所以稳定段全往前提——认识、工坊、用户印象、状态、上次、计划；
+     * 每轮真会变的放后面——今天（6 小时窗口在滑）、相关记忆、提示。
+     * 以前用户印象和状态排在相关记忆后面，等于每轮白算一遍。
+     */
     const parts = []
     // 自我认识排最前：它回答「咱是谁」，比「今天发生了什么」更先该被看到。
     if (knowledgeLines.length > 0) parts.push(HEAD_KNOWLEDGE + '\n' + knowledgeLines.join('\n'))
     // 工坊单独一段：它是「怎么干活」，不是「发生过什么」，别和记忆混着。
     if (pinnedLines.length > 0) parts.push(HEAD_PINNED + '\n' + pinnedLines.join('\n\n'))
+    // 用户印象和状态都是慢变量，压在前面才吃得到缓存。
+    if (ownerLine) parts.push(HEAD_OWNER + '\n' + ownerLine)
+    if (statusLine) parts.push(HEAD_STATUS + '\n' + clipped(statusLine, BUDGET_STATUS))
     if (lastLines.length > 0) parts.push(HEAD_LAST + '\n' + lastLines.join('\n'))
     if (planLines.length > 0) parts.push(HEAD_DOING + '\n' + planLines.join('\n'))
     if (wishLines.length > 0) parts.push(HEAD_WANT + '\n' + wishLines.join('\n'))
+    // 从这儿往下每轮都可能变。
     if (todayLines.length > 0) parts.push(HEAD_TODAY + '\n' + todayLines.join('\n'))
     if (floatLines.length > 0) {
-      const lines = cautionLine
-        ? floatLines.concat(['（' + clipped(cautionLine, 70) + '）'])
-        : floatLines
+      const lines = floatLines.slice()
+      // 凭什么挑的这几条（2026-11-20）：不是黑盒，说得出来。
+      if (reasonLine) lines.push('（凭：' + clipped(reasonLine, 54) + '）')
+      if (cautionLine) lines.push('（' + clipped(cautionLine, 70) + '）')
       parts.push(HEAD_FLOATING + '\n' + lines.join('\n'))
     } else if (cautionLine) {
       parts.push(HEAD_FLOATING + '\n（' + clipped(cautionLine, 70) + '）')
     }
-    if (ownerLine) parts.push(HEAD_OWNER + '\n' + ownerLine)
-    if (statusLine) parts.push(HEAD_STATUS + '\n' + clipped(statusLine, BUDGET_STATUS))
     if (hintLine) parts.push(HEAD_HINT + '\n' + clipped(hintLine, BUDGET_HINT))
     return parts.join('\n\n')
   }

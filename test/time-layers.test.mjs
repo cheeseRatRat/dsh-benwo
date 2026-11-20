@@ -57,10 +57,10 @@ await check('提示词解析：上个月 → 约 60 天；去年 → 约 400 天
 })
 
 await check('提示词解析：点名月份 → 从那个月一号算起的天数', () => {
-  // 现在是 11 月 9 日，八月是 100 天前左右
-  const d = hintDays('八月那次的修图流程')
+  // 用固定的 NOW，别用今天：这条以前不带 now，日期一过 11 月区间就松了（2026-11-18 红过一次）。
+  const d = hintDays('八月那次的修图流程', NOW)
   assert.ok(d >= 95 && d <= 105, `八月的跨度算成了 ${d} 天`)
-  const numeric = hintDays('8月那次')
+  const numeric = hintDays('8月那次', NOW)
   assert.ok(numeric >= 95 && numeric <= 105, `8 月算成了 ${numeric} 天`)
 })
 

@@ -228,20 +228,21 @@ await check('打折：勉强够线的让位，真正相关的还留得住', () =
 
 await check('主人档案默认不占位', () => {
   const block = buildMemoryBlock({ records: [rec('a', 60)], preRanked: true })
-  assert.ok(!block.text.includes('【关于主人】'), block.text)
+  assert.ok(!block.text.includes('【用户印象】'), block.text)
 })
 
-await check('问到才把主人档案带上，排在最后', () => {
+await check('问到才把用户档案带上，排在相关记忆前面', () => {
   const block = buildMemoryBlock({
     records: [rec('a', 60)],
     preRanked: true,
     owner: '主人\n2001.5.7 出生',
   })
-  assert.ok(block.text.includes('【关于主人】'), block.text)
+  assert.ok(block.text.includes('【用户印象】'), block.text)
   assert.ok(block.text.includes('2001.5.7'), block.text)
-  const idxOwner = block.text.indexOf('【关于主人】')
+  const idxOwner = block.text.indexOf('【用户印象】')
   const idxFloat = block.text.indexOf('【相关记忆】')
-  assert.ok(idxOwner > idxFloat, '主人档案该排在浮上来的后面')
+  // 2026-11-20：换成「慢变量在前」。缓存按前缀命中，用户印象排后面等于每轮白算。
+  assert.ok(idxOwner < idxFloat, '用户印象是慢变量，该排在相关记忆前面')
 })
 
 await check('主人档案太长会被裁，不会挤爆预算', () => {
@@ -251,7 +252,7 @@ await check('主人档案太长会被裁，不会挤爆预算', () => {
     owner: '主'.repeat(2000),
   })
   assert.ok(block.chars <= 650 + 40, '字数超了：' + block.chars)
-  assert.ok(block.text.includes('【关于主人】'))
+  assert.ok(block.text.includes('【用户印象】'))
 })
 
 await check('提醒默认不出现', () => {

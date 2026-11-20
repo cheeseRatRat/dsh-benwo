@@ -48,10 +48,17 @@ export function settleStrength(strength, days, importance) {
   return clamp(Math.max(FLOOR, base * Math.pow(2, -elapsed / h)), FLOOR, CAP)
 }
 
-/** 被提起：s ← min(95, s + (100−s)·(0.25 + 0.05·min(证据,5))) */
+/**
+ * 被提起：s ← min(95, s + (100−s)·(0.08 + 0.02·min(证据,5)))
+ *
+ * 2026-11-18 改：原来每次回升剩余空间的 25%~50%，太猛——老记忆被召回十几二十次，
+ * 几次就摸到 95 顶格，然后「强度高 → 更容易被挑中 → 继续变强」，雪球滚起来，
+ * 10 月的旧事长期占住前排，新事挤不上去。
+ * 现在每次 8%~18%，让衰减重新有话语权；配合「同一条一天最多强化一次」。
+ */
 export function reinforce(strength, evidence) {
   const base = Number.isFinite(Number(strength)) ? Number(strength) : NEW_STRENGTH
-  const boost = 0.25 + 0.05 * Math.min(Math.max(0, Number(evidence) || 0), 5)
+  const boost = 0.08 + 0.02 * Math.min(Math.max(0, Number(evidence) || 0), 5)
   return Math.min(CAP, base + (100 - base) * boost)
 }
 

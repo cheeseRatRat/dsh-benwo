@@ -40,6 +40,15 @@ check('正文里必须能找到「为什么」', () => {
   assert.equal(detail, '看见了什么')
   assert.equal(why, '为什么留')
 })
+check('detail 剥掉「看见了什么：」这层壳，写回去也不带', () => {
+  // 2026-11-12：这层壳是标签不是内容。老数据读出来剥掉，新写的根本不带。
+  const { detail, why } = splitWhy('看见了什么：主人说，正文直接写事。\n\n为什么值得记：壳会挤掉真话。')
+  assert.equal(detail, '主人说，正文直接写事。')
+  assert.equal(why, '壳会挤掉真话。')
+  const out = validateDraft(draft({ body: '看见了什么：主人说，正文直接写事。\n\n为什么值得记：壳会挤掉真话。' }))
+  assert.equal(out.ok, true)
+  assert.ok(!out.record.body.includes('看见了什么'), out.record.body)
+})
 check('没有为什么就是残条', () => {
   const out = validateDraft(draft({ body: '主人说了一句话，没有为什么。' }))
   assert.equal(out.ok, false)
